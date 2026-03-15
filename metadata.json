@@ -1,0 +1,5 @@
+{
+  "name": "ShorePay",
+  "description": "A modern, secure, and user-friendly cashless payment gateway for beachfront resorts and local businesses in Dangay, Roxas.",
+  "requestFramePermissions": ["camera"]
+}

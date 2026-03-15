@@ -1,0 +1,23 @@
+@import "tailwindcss";
+
+@theme {
+  --color-ocean-blue: #0077B6;
+  --color-sand-gold: #EDC9AF;
+  --color-clean-white: #FFFFFF;
+  --color-coastal-gradient-start: #0077B6;
+  --color-coastal-gradient-end: #9B5DE5;
+}
+
+@layer base {
+  body {
+    @apply bg-clean-white text-slate-900 font-sans;
+  }
+}
+
+.coastal-gradient {
+  background: linear-gradient(135deg, #0077B6 0%, #9B5DE5 100%);
+}
+
+.glass-card {
+  @apply bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl;
+}
