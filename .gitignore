@@ -12,3 +12,4 @@ android/*.keystore
 android/*.jks
 *.keystore
 *.jks
+firebase-applet-config.json
