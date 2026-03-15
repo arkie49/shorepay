@@ -407,7 +407,7 @@ function ResortDetailScreen({ resort, profile, onBack }: { resort: Resort; profi
                   }
 
                   const amount = nights * 3500;
-                  storage.addBooking({
+                  const newBooking = storage.addBooking({
                     userUid: profile.uid,
                     userName: profile.fullName,
                     resortId: resort.id,
@@ -419,6 +419,7 @@ function ResortDetailScreen({ resort, profile, onBack }: { resort: Resort; profi
                     amount,
                     createdAt: new Date().toISOString(),
                   });
+                  void storage.addBookingRemote(newBooking).catch(() => {});
 
                   alert(`Booking confirmed! ₱${amount.toLocaleString()} via ${provider}.`);
                   setShowBooking(false);
@@ -441,7 +442,7 @@ function TransactionHistoryScreen({ profile, onBack }: { profile: UserProfile; o
   const [transactions, setTransactions] = useState<Transaction[]>([]);
 
   useEffect(() => {
-    setTransactions(storage.getTransactions(profile.uid));
+    void storage.getTransactionsRemote(profile.uid).then(setTransactions);
   }, [profile.uid]);
 
   return (
@@ -521,6 +522,14 @@ export default function App() {
       if (currentUser.role === 'admin') setActiveTab('admin');
       else if (currentUser.role === 'merchant') setActiveTab('merchant');
       else setActiveTab('home');
+      if (currentUser.uid !== 'admin') {
+        void storage.getUserRemote(currentUser.uid).then((remote) => {
+          if (!remote) return;
+          storage.saveUser(remote);
+          storage.setCurrentUser(remote);
+          setProfile(remote);
+        });
+      }
     } else {
       setProfile(null);
       setView('auth');
@@ -606,41 +615,44 @@ function AuthScreen({ mode, setMode, onAuth }: { mode: 'login' | 'signup'; setMo
   const [role, setRole] = useState<UserRole>('customer');
   const [error, setError] = useState('');
   const ADMIN_USERNAME = 'admin';
-  const ADMIN_PASSWORD = 'admin123';
+  const ADMIN_PASSWORD = 'ShorePay2024!';
 
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    
-    const users = storage.getUsers();
-    
+
     if (mode === 'signup') {
-      if (users.find(u => u.email === email)) {
-        setError('Email already exists');
-        return;
-      }
-      
-      const newUser: UserProfile = {
-        uid: Math.random().toString(36).substring(7),
-        email,
-        fullName,
-        username,
-        balance: 1000,
-        role,
-        createdAt: new Date().toISOString()
-      };
-      
-      storage.saveUser(newUser);
-      if (role === 'merchant') {
-        storage.saveMerchant({
-          uid: newUser.uid,
-          businessName: fullName,
-          totalSalesToday: 0,
-          location: 'Dangay, Roxas',
-          isVerified: false
+      try {
+        const existingUid = await storage.getUserUidByEmailRemote(email);
+        if (existingUid) {
+          setError('Email already exists');
+          return;
+        }
+
+        const newUser = await storage.createUserRemote({
+          email,
+          password,
+          fullName,
+          username,
+          balance: 1000,
+          role,
+          createdAt: new Date().toISOString(),
         });
+
+        storage.saveUser(newUser);
+        if (role === 'merchant') {
+          storage.saveMerchant({
+            uid: newUser.uid,
+            businessName: fullName,
+            totalSalesToday: 0,
+            location: 'Dangay, Roxas',
+            isVerified: false,
+          });
+        }
+        onAuth(newUser);
+      } catch {
+        setError('Sign up failed. Check your internet or Firebase rules.');
       }
-      onAuth(newUser);
     } else {
       if (email.trim().toLowerCase() === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
         const adminUser: UserProfile = {
@@ -655,12 +667,39 @@ function AuthScreen({ mode, setMode, onAuth }: { mode: 'login' | 'signup'; setMo
         onAuth(adminUser);
         return;
       }
+      try {
+        const uid = await storage.getUserUidByEmailRemote(email);
+        if (uid) {
+          const remoteUser = await storage.getUserRemoteWithPasswordHash(uid);
+          if (!remoteUser) {
+            setError('Invalid credentials');
+            return;
+          }
+          const ok = await storage.verifyUserPassword(remoteUser.uid, password, remoteUser.passwordHash);
+          if (!ok) {
+            setError('Invalid credentials');
+            return;
+          }
+          if (remoteUser.passwordHash) storage.setPasswordHash(remoteUser.uid, remoteUser.passwordHash);
+          const { passwordHash: _passwordHash, ...profile } = remoteUser as any;
+          storage.saveUser(profile as UserProfile);
+          onAuth(profile as UserProfile);
+          return;
+        }
+      } catch {}
+
+      const users = storage.getUsers();
       const user = users.find(u => u.email === email);
-      if (user) {
-        onAuth(user);
-      } else {
+      if (!user) {
         setError('Invalid credentials');
+        return;
       }
+      const ok = await storage.verifyUserPassword(user.uid, password, storage.getPasswordHash(user.uid) ?? undefined);
+      if (!ok) {
+        setError('Invalid credentials');
+        return;
+      }
+      onAuth(user);
     }
   };
 
@@ -1142,9 +1181,15 @@ function WalletScreen({ profile, onNavigate }: { profile: UserProfile; onNavigat
   const [cameraActive, setCameraActive] = useState(false);
 
   useEffect(() => {
-    setTransactions(storage.getTransactions(profile.uid));
+    void storage.getTransactionsRemote(profile.uid).then(setTransactions);
     const current = storage.getCurrentUser();
     if (current?.uid === profile.uid) setBalance(current.balance);
+    void storage.getUserRemote(profile.uid).then((remote) => {
+      if (!remote) return;
+      setBalance(remote.balance);
+      storage.saveUser(remote);
+      storage.setCurrentUser(remote);
+    });
   }, [profile.uid]);
 
   const stopCamera = () => {
@@ -1219,13 +1264,15 @@ function WalletScreen({ profile, onNavigate }: { profile: UserProfile; onNavigat
         merchantName: 'Beachfront Grill',
         timestamp: new Date().toISOString()
       });
+      void storage.addTransactionRemote(newTx).catch(() => {});
       
       const newBalance = balance - amount;
       const updatedProfile = { ...profile, balance: newBalance };
       storage.saveUser(updatedProfile);
       storage.setCurrentUser(updatedProfile);
       setBalance(newBalance);
-      setTransactions(storage.getTransactions(profile.uid));
+      void storage.updateUserRemote(profile.uid, { balance: newBalance }).catch(() => {});
+      void storage.getTransactionsRemote(profile.uid).then(setTransactions);
       
       setShowScanner(false);
       setSuccessData({
@@ -1257,8 +1304,9 @@ function WalletScreen({ profile, onNavigate }: { profile: UserProfile; onNavigat
     storage.saveUser(updatedProfile);
     storage.setCurrentUser(updatedProfile);
     setBalance(newBalance);
+    void storage.updateUserRemote(profile.uid, { balance: newBalance }).catch(() => {});
 
-    storage.addTransaction({
+    const newTx = storage.addTransaction({
       fromUid: profile.uid,
       toUid: activeModal === 'cash-in' ? profile.uid : 'external',
       amount,
@@ -1267,8 +1315,9 @@ function WalletScreen({ profile, onNavigate }: { profile: UserProfile; onNavigat
       timestamp: new Date().toISOString(),
       description: activeModal === 'cash-in' ? `Top up via ${selectedProvider}` : `Cash out to ${selectedProvider}`,
     });
+    void storage.addTransactionRemote(newTx).catch(() => {});
 
-    setTransactions(storage.getTransactions(profile.uid));
+    void storage.getTransactionsRemote(profile.uid).then(setTransactions);
     setActiveModal(null);
     alert(activeModal === 'cash-in' ? 'Top up successful!' : 'Cash out successful!');
   };
@@ -1676,56 +1725,454 @@ function MerchantDashboard({ profile }: { profile: UserProfile }) {
 // --- Admin Dashboard ---
 
 function AdminDashboard({ profile }: { profile: UserProfile }) {
+  const [activeSection, setActiveSection] = useState<'overview' | 'users' | 'transactions' | 'merchants' | 'bookings'>('overview');
+  const [users, setUsers] = useState<UserProfile[]>([]);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [merchants, setMerchants] = useState<Merchant[]>([]);
   const [bookings, setBookings] = useState<Booking[]>([]);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    setBookings(storage.getBookings());
+    const loadData = async () => {
+      try {
+        // Load all users from local storage (admin can see all)
+        const allUsers = storage.getUsers();
+        setUsers(allUsers);
+
+        // Load all transactions (admin sees everything)
+        const allTransactions = storage.get(KEYS.TRANSACTIONS, []);
+        setTransactions(allTransactions);
+
+        // Load merchants
+        const allMerchants = storage.get(KEYS.MERCHANTS, []);
+        setMerchants(allMerchants);
+
+        // Load bookings
+        const allBookings = await storage.getBookingsRemote();
+        setBookings(allBookings);
+      } catch (error) {
+        console.error('Error loading admin data:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadData();
   }, []);
+
+  const totalRevenue = transactions
+    .filter(t => t.type === 'payment')
+    .reduce((sum, t) => sum + t.amount, 0);
+
+  const totalUsers = users.length;
+  const totalMerchants = merchants.length;
+  const totalBookings = bookings.length;
+
+  if (loading) {
+    return (
+      <div className="h-screen flex items-center justify-center">
+        <motion.div
+          animate={{ rotate: 360 }}
+          transition={{ repeat: Infinity, duration: 1, ease: "linear" }}
+          className="w-12 h-12 border-4 border-ocean-blue border-t-transparent rounded-full"
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="p-6 space-y-6">
+      {/* Header */}
       <div className="flex justify-between items-center">
-        <h1 className="text-2xl font-bold">Admin Console</h1>
+        <h1 className="text-2xl font-bold">Admin Dashboard</h1>
         <div className="flex gap-2">
-          <button onClick={() => setBookings(storage.getBookings())} className="w-10 h-10 bg-slate-100 rounded-full flex items-center justify-center"><Shield size={20} /></button>
+          <button
+            onClick={() => window.location.reload()}
+            className="w-10 h-10 bg-slate-100 rounded-full flex items-center justify-center hover:bg-slate-200 transition-colors"
+          >
+            <Shield size={20} />
+          </button>
         </div>
       </div>
 
-      <div className="bg-white rounded-[32px] border border-slate-100 shadow-sm overflow-hidden">
-        <div className="p-6 border-b border-slate-100 flex items-center justify-between">
-          <div>
-            <h3 className="text-lg font-extrabold">Resort Bookings</h3>
-            <p className="text-sm text-slate-500">Name, date, and amount</p>
-          </div>
-          <div className="text-right">
-            <p className="text-xs text-slate-400 uppercase font-bold">Total</p>
-            <p className="text-lg font-extrabold text-ocean-blue">
-              ₱{bookings.reduce((sum, b) => sum + (b.amount || 0), 0).toLocaleString()}
-            </p>
-          </div>
-        </div>
+      {/* Navigation Tabs */}
+      <div className="flex gap-2 overflow-x-auto">
+        {[
+          { id: 'overview', label: 'Overview', icon: <BarChart3 size={16} /> },
+          { id: 'users', label: 'Users', icon: <Users size={16} /> },
+          { id: 'transactions', label: 'Transactions', icon: <ArrowUpRight size={16} /> },
+          { id: 'merchants', label: 'Merchants', icon: <Store size={16} /> },
+          { id: 'bookings', label: 'Bookings', icon: <CalendarDays size={16} /> },
+        ].map((tab) => (
+          <button
+            key={tab.id}
+            onClick={() => setActiveSection(tab.id as any)}
+            className={cn(
+              "px-4 py-2 rounded-full text-sm font-bold flex items-center gap-2 whitespace-nowrap transition-all",
+              activeSection === tab.id
+                ? "bg-ocean-blue text-white"
+                : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+            )}
+          >
+            {tab.icon}
+            {tab.label}
+          </button>
+        ))}
+      </div>
 
-        <div className="divide-y divide-slate-100">
-          {bookings.length === 0 ? (
-            <div className="p-10 text-center text-slate-400">
-              <p className="font-bold">No bookings yet</p>
-              <p className="text-xs">Bookings will appear here after users confirm a resort booking.</p>
-            </div>
-          ) : (
-            bookings.map(b => (
-              <div key={b.id} className="p-5 flex items-center justify-between">
-                <div>
-                  <p className="font-extrabold text-slate-900">{b.userName}</p>
-                  <p className="text-xs text-slate-500">
-                    {new Date(b.createdAt).toLocaleString()} • {b.resortName}
-                  </p>
+      {/* Overview Section */}
+      {activeSection === 'overview' && (
+        <div className="space-y-6">
+          {/* Stats Cards */}
+          <div className="grid grid-cols-2 gap-4">
+            <div className="bg-white rounded-[24px] p-6 border border-slate-100">
+              <div className="flex items-center gap-3 mb-2">
+                <div className="w-10 h-10 bg-ocean-blue/10 rounded-full flex items-center justify-center">
+                  <Users className="text-ocean-blue" size={20} />
                 </div>
-                <p className="font-extrabold text-slate-900">₱{b.amount.toLocaleString()}</p>
+                <div>
+                  <p className="text-xs text-slate-500 uppercase font-bold">Total Users</p>
+                  <p className="text-2xl font-extrabold">{totalUsers}</p>
+                </div>
               </div>
-            ))
-          )}
+            </div>
+
+            <div className="bg-white rounded-[24px] p-6 border border-slate-100">
+              <div className="flex items-center gap-3 mb-2">
+                <div className="w-10 h-10 bg-green-500/10 rounded-full flex items-center justify-center">
+                  <Wallet className="text-green-500" size={20} />
+                </div>
+                <div>
+                  <p className="text-xs text-slate-500 uppercase font-bold">Total Revenue</p>
+                  <p className="text-2xl font-extrabold text-green-500">₱{totalRevenue.toLocaleString()}</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-white rounded-[24px] p-6 border border-slate-100">
+              <div className="flex items-center gap-3 mb-2">
+                <div className="w-10 h-10 bg-purple-500/10 rounded-full flex items-center justify-center">
+                  <Store className="text-purple-500" size={20} />
+                </div>
+                <div>
+                  <p className="text-xs text-slate-500 uppercase font-bold">Merchants</p>
+                  <p className="text-2xl font-extrabold">{totalMerchants}</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-white rounded-[24px] p-6 border border-slate-100">
+              <div className="flex items-center gap-3 mb-2">
+                <div className="w-10 h-10 bg-orange-500/10 rounded-full flex items-center justify-center">
+                  <CalendarDays className="text-orange-500" size={20} />
+                </div>
+                <div>
+                  <p className="text-xs text-slate-500 uppercase font-bold">Bookings</p>
+                  <p className="text-2xl font-extrabold">{totalBookings}</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Recent Activity */}
+          <div className="bg-white rounded-[32px] border border-slate-100 shadow-sm overflow-hidden">
+            <div className="p-6 border-b border-slate-100">
+              <h3 className="text-lg font-extrabold">Recent Activity</h3>
+              <p className="text-sm text-slate-500">Latest transactions and bookings</p>
+            </div>
+
+            <div className="divide-y divide-slate-100 max-h-96 overflow-y-auto">
+              {[...transactions.slice(0, 5), ...bookings.slice(0, 3)].sort((a, b) =>
+                new Date(b.timestamp || b.createdAt).getTime() - new Date(a.timestamp || a.createdAt).getTime()
+              ).map((item: any) => (
+                <div key={item.id} className="p-5 flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-slate-100 rounded-full flex items-center justify-center">
+                      {item.amount ? <ArrowUpRight size={16} className="text-green-500" /> : <CalendarDays size={16} className="text-orange-500" />}
+                    </div>
+                    <div>
+                      <p className="font-extrabold text-slate-900">
+                        {item.amount ? `₱${item.amount.toLocaleString()}` : `Booking: ${item.resortName}`}
+                      </p>
+                      <p className="text-xs text-slate-500">
+                        {item.fromUid ? `${item.fromUid} → ${item.toUid}` : item.userName} • {new Date(item.timestamp || item.createdAt).toLocaleString()}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
-      </div>
+      )}
+
+      {/* Users Section */}
+      {activeSection === 'users' && (
+        <div className="space-y-6">
+          <div className="bg-white rounded-[32px] border border-slate-100 shadow-sm overflow-hidden">
+            <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+              <div>
+                <h3 className="text-lg font-extrabold">User Management</h3>
+                <p className="text-sm text-slate-500">All registered users and their transaction activity</p>
+              </div>
+              <div className="text-right">
+                <p className="text-xs text-slate-400 uppercase font-bold">Total Users</p>
+                <p className="text-lg font-extrabold text-ocean-blue">{totalUsers}</p>
+              </div>
+            </div>
+
+            <div className="divide-y divide-slate-100 max-h-96 overflow-y-auto">
+              {users.length === 0 ? (
+                <div className="p-10 text-center text-slate-400">
+                  <p className="font-bold">No users yet</p>
+                  <p className="text-xs">Users will appear here after they register.</p>
+                </div>
+              ) : (
+                users.map(user => {
+                  const userTransactions = transactions.filter(t => t.fromUid === user.uid || t.toUid === user.uid);
+                  const totalSpent = userTransactions
+                    .filter(t => t.fromUid === user.uid && t.type === 'payment')
+                    .reduce((sum, t) => sum + t.amount, 0);
+                  const totalReceived = userTransactions
+                    .filter(t => t.toUid === user.uid && t.type === 'payment')
+                    .reduce((sum, t) => sum + t.amount, 0);
+
+                  return (
+                    <div key={user.uid} className="p-5">
+                      <div className="flex items-center justify-between mb-4">
+                        <div className="flex items-center gap-4">
+                          <div className="w-12 h-12 bg-slate-100 rounded-full flex items-center justify-center">
+                            <UserIcon size={24} className="text-slate-400" />
+                          </div>
+                          <div>
+                            <p className="font-extrabold text-slate-900">{user.fullName}</p>
+                            <p className="text-xs text-slate-500">@{user.username} • {user.email}</p>
+                            <div className="flex items-center gap-2 mt-1">
+                              <span className={cn(
+                                "px-2 py-1 text-[10px] font-bold uppercase tracking-widest rounded-full",
+                                user.role === 'admin' ? "bg-red-100 text-red-600" :
+                                user.role === 'merchant' ? "bg-purple-100 text-purple-600" :
+                                "bg-blue-100 text-blue-600"
+                              )}>
+                                {user.role}
+                              </span>
+                              <span className="text-xs text-slate-500">Balance: ₱{user.balance.toLocaleString()}</span>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-xs text-slate-400">Joined</p>
+                          <p className="text-xs font-bold">{new Date(user.createdAt).toLocaleDateString()}</p>
+                        </div>
+                      </div>
+
+                      {/* User Statistics */}
+                      <div className="grid grid-cols-3 gap-4 mb-4">
+                        <div className="bg-slate-50 rounded-xl p-3 text-center">
+                          <p className="text-xs text-slate-500 uppercase font-bold">Transactions</p>
+                          <p className="text-lg font-extrabold text-slate-900">{userTransactions.length}</p>
+                        </div>
+                        <div className="bg-green-50 rounded-xl p-3 text-center">
+                          <p className="text-xs text-green-600 uppercase font-bold">Spent</p>
+                          <p className="text-lg font-extrabold text-green-600">₱{totalSpent.toLocaleString()}</p>
+                        </div>
+                        <div className="bg-blue-50 rounded-xl p-3 text-center">
+                          <p className="text-xs text-blue-600 uppercase font-bold">Received</p>
+                          <p className="text-lg font-extrabold text-blue-600">₱{totalReceived.toLocaleString()}</p>
+                        </div>
+                      </div>
+
+                      {/* Recent Transactions */}
+                      {userTransactions.length > 0 && (
+                        <div>
+                          <p className="text-sm font-bold text-slate-700 mb-2">Recent Transactions</p>
+                          <div className="space-y-2 max-h-32 overflow-y-auto">
+                            {userTransactions.slice(0, 3).map(tx => (
+                              <div key={tx.id} className="flex items-center justify-between bg-slate-50 rounded-lg p-3">
+                                <div className="flex items-center gap-2">
+                                  <ArrowUpRight size={14} className={cn(
+                                    tx.type === 'payment' ? "text-green-500" :
+                                    tx.type === 'cash-in' ? "text-blue-500" :
+                                    "text-red-500"
+                                  )} />
+                                  <div>
+                                    <p className="text-xs font-bold text-slate-900">
+                                      {tx.type === 'payment' ? (tx.fromUid === user.uid ? 'Paid' : 'Received') :
+                                       tx.type === 'cash-in' ? 'Cash In' : 'Withdrawal'}
+                                    </p>
+                                    <p className="text-xs text-slate-500">
+                                      {tx.fromUid === user.uid ? `to ${tx.toUid}` : `from ${tx.fromUid}`}
+                                    </p>
+                                  </div>
+                                </div>
+                                <div className="text-right">
+                                  <p className="text-xs font-bold text-slate-900">₱{tx.amount.toLocaleString()}</p>
+                                  <p className="text-xs text-slate-400">{new Date(tx.timestamp).toLocaleDateString()}</p>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Transactions Section */}
+      {activeSection === 'transactions' && (
+        <div className="bg-white rounded-[32px] border border-slate-100 shadow-sm overflow-hidden">
+          <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+            <div>
+              <h3 className="text-lg font-extrabold">Transaction Monitoring</h3>
+              <p className="text-sm text-slate-500">All transactions across the platform</p>
+            </div>
+            <div className="text-right">
+              <p className="text-xs text-slate-400 uppercase font-bold">Total Volume</p>
+              <p className="text-lg font-extrabold text-green-500">₱{totalRevenue.toLocaleString()}</p>
+            </div>
+          </div>
+
+          <div className="divide-y divide-slate-100 max-h-96 overflow-y-auto">
+            {transactions.length === 0 ? (
+              <div className="p-10 text-center text-slate-400">
+                <p className="font-bold">No transactions yet</p>
+                <p className="text-xs">Transactions will appear here as users make payments.</p>
+              </div>
+            ) : (
+              transactions.map(tx => (
+                <div key={tx.id} className="p-5 flex items-center justify-between">
+                  <div className="flex items-center gap-4">
+                    <div className="w-10 h-10 bg-slate-100 rounded-full flex items-center justify-center">
+                      <ArrowUpRight size={16} className={cn(
+                        tx.type === 'payment' ? "text-green-500" :
+                        tx.type === 'cash-in' ? "text-blue-500" :
+                        "text-red-500"
+                      )} />
+                    </div>
+                    <div>
+                      <p className="font-extrabold text-slate-900">₱{tx.amount.toLocaleString()}</p>
+                      <p className="text-xs text-slate-500">
+                        {tx.fromUid} → {tx.toUid} • {tx.type}
+                      </p>
+                      {tx.description && (
+                        <p className="text-xs text-slate-400">{tx.description}</p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-xs text-slate-400">{tx.status}</p>
+                    <p className="text-xs font-bold">{new Date(tx.timestamp).toLocaleString()}</p>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Merchants Section */}
+      {activeSection === 'merchants' && (
+        <div className="bg-white rounded-[32px] border border-slate-100 shadow-sm overflow-hidden">
+          <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+            <div>
+              <h3 className="text-lg font-extrabold">Merchant Management</h3>
+              <p className="text-sm text-slate-500">Registered merchants and their performance</p>
+            </div>
+            <div className="text-right">
+              <p className="text-xs text-slate-400 uppercase font-bold">Total Merchants</p>
+              <p className="text-lg font-extrabold text-purple-500">{totalMerchants}</p>
+            </div>
+          </div>
+
+          <div className="divide-y divide-slate-100 max-h-96 overflow-y-auto">
+            {merchants.length === 0 ? (
+              <div className="p-10 text-center text-slate-400">
+                <p className="font-bold">No merchants yet</p>
+                <p className="text-xs">Merchants will appear here after they register.</p>
+              </div>
+            ) : (
+              merchants.map(merchant => (
+                <div key={merchant.uid} className="p-5 flex items-center justify-between">
+                  <div className="flex items-center gap-4">
+                    <div className="w-12 h-12 bg-slate-100 rounded-full flex items-center justify-center">
+                      <Store size={24} className="text-slate-400" />
+                    </div>
+                    <div>
+                      <p className="font-extrabold text-slate-900">{merchant.businessName}</p>
+                      <p className="text-xs text-slate-500">{merchant.location}</p>
+                      <div className="flex items-center gap-2 mt-1">
+                        <span className={cn(
+                          "px-2 py-1 text-[10px] font-bold uppercase tracking-widest rounded-full",
+                          merchant.isVerified ? "bg-green-100 text-green-600" : "bg-yellow-100 text-yellow-600"
+                        )}>
+                          {merchant.isVerified ? "Verified" : "Pending"}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-xs text-slate-400">Today's Sales</p>
+                    <p className="text-sm font-bold">₱{merchant.totalSalesToday.toLocaleString()}</p>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Bookings Section */}
+      {activeSection === 'bookings' && (
+        <div className="bg-white rounded-[32px] border border-slate-100 shadow-sm overflow-hidden">
+          <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+            <div>
+              <h3 className="text-lg font-extrabold">Booking Oversight</h3>
+              <p className="text-sm text-slate-500">All resort bookings and reservations</p>
+            </div>
+            <div className="text-right">
+              <p className="text-xs text-slate-400 uppercase font-bold">Total Bookings</p>
+              <p className="text-lg font-extrabold text-orange-500">{totalBookings}</p>
+            </div>
+          </div>
+
+          <div className="divide-y divide-slate-100 max-h-96 overflow-y-auto">
+            {bookings.length === 0 ? (
+              <div className="p-10 text-center text-slate-400">
+                <p className="font-bold">No bookings yet</p>
+                <p className="text-xs">Bookings will appear here after users confirm a resort booking.</p>
+              </div>
+            ) : (
+              bookings.map(booking => (
+                <div key={booking.id} className="p-5 flex items-center justify-between">
+                  <div className="flex items-center gap-4">
+                    <div className="w-12 h-12 bg-slate-100 rounded-full flex items-center justify-center">
+                      <CalendarDays size={24} className="text-slate-400" />
+                    </div>
+                    <div>
+                      <p className="font-extrabold text-slate-900">{booking.userName}</p>
+                      <p className="text-xs text-slate-500">
+                        {booking.resortName} • {booking.guests} guest{booking.guests !== 1 ? 's' : ''}
+                      </p>
+                      <p className="text-xs text-slate-400">
+                        {new Date(booking.checkIn).toLocaleDateString()} - {new Date(booking.checkOut).toLocaleDateString()}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-sm font-bold text-ocean-blue">₱{booking.amount.toLocaleString()}</p>
+                    <p className="text-xs text-slate-400">{new Date(booking.createdAt).toLocaleDateString()}</p>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1787,6 +2234,7 @@ function AccountSettingsScreen({ profile, onBack, onProfileUpdated }: { profile:
     const next: UserProfile = { ...profile, fullName: fullName.trim(), username: username.trim() };
     storage.saveUser(next);
     storage.setCurrentUser(next);
+    if (next.uid !== 'admin') void storage.updateUserRemote(next.uid, { fullName: next.fullName, username: next.username }).catch(() => {});
     onProfileUpdated(next);
     alert('Account updated.');
   };
