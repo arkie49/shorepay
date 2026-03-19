@@ -28,11 +28,42 @@ export interface Booking {
   userName: string;
   resortId: string;
   resortName: string;
+  roomId?: string;
+  roomName?: string;
+  pricePerNight?: number;
   checkIn: string;
   checkOut: string;
   guests: number;
   provider: string;
   amount: number;
+  referenceNumber?: string;
+  createdAt: string;
+}
+
+export interface Customer {
+  id: string;
+  resortId: string;
+  fullName: string;
+  email: string;
+  phone: string;
+  address: string;
+  roomId?: string;
+  roomName?: string;
+  pricePerNight?: number;
+  checkIn: string;
+  checkOut: string;
+  guests: number;
+  paymentMethod: string;
+  amount: number;
+  referenceNumber?: string;
+  createdAt: string;
+  status: 'pending' | 'confirmed' | 'cancelled';
+}
+
+export interface ResortAdmin {
+  resortId: string;
+  username: string;
+  passwordHash: string;
   createdAt: string;
 }
 
@@ -42,6 +73,7 @@ export interface Merchant {
   totalSalesToday: number;
   location: string;
   isVerified: boolean;
+  resortId?: string;
 }
 
 export interface Resort {
@@ -51,4 +83,15 @@ export interface Resort {
   description: string;
   location: string;
   rating: number;
+  registrationFields?: string[]; // Custom fields for each resort's registration form
+  rooms?: ResortRoom[];
+}
+
+export interface ResortRoom {
+  id: string;
+  name: string;
+  pricePerNight: number;
+  maxGuests: number;
+  description?: string;
+  imageUrl?: string;
 }
