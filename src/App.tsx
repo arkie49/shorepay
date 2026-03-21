@@ -44,7 +44,7 @@ import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { QRCodeSVG } from 'qrcode.react';
 import { storage } from './services/storage';
-import { type Booking, type Merchant, type UserProfile, type Transaction, type Resort, type UserRole } from './types';
+import { type Booking, type Customer, type Merchant, type UserProfile, type Transaction, type Resort, type UserRole } from './types';
 
 // --- Utility ---
 function cn(...inputs: ClassValue[]) {
@@ -160,6 +160,27 @@ function ResortDetailScreen({ resort, profile, onBack }: { resort: Resort; profi
   const [checkOut, setCheckOut] = useState('');
   const [showAllGallery, setShowAllGallery] = useState(false);
   const [customerForm, setCustomerForm] = useState<Record<string, string>>({});
+
+  const availableRooms = useMemo(() => {
+    const rooms = resort.rooms ?? [];
+    return rooms.map((room) => ({
+      ...room,
+      pricePerNight: room.pricePerNight,
+    }));
+  }, [resort.rooms]);
+
+  const [selectedRoomId, setSelectedRoomId] = useState<string>(availableRooms[0]?.id ?? '');
+
+  useEffect(() => {
+    if (availableRooms.length > 0) {
+      setSelectedRoomId(availableRooms[0].id);
+    }
+  }, [availableRooms]);
+
+  const selectedRoom = useMemo(() => {
+    return availableRooms.find((room) => room.id === selectedRoomId) ?? availableRooms[0] ?? { id: 'default', name: 'Standard Room', pricePerNight: 500, maxGuests: 2, description: 'Budget-friendly standard room.', imageUrl: resort.imageUrl };
+  }, [availableRooms, selectedRoomId]);
+
   const gallery = RESORT_GALLERIES[resort.id] ?? [resort.imageUrl];
   const mapQuery = `${resort.name}, ${resort.location}, Roxas`;
   const mapSrc = `https://www.google.com/maps?q=${encodeURIComponent(mapQuery)}&output=embed`;
@@ -227,21 +248,108 @@ function ResortDetailScreen({ resort, profile, onBack }: { resort: Resort; profi
       </div>
 
       <div className="flex-1 overflow-y-auto p-6 pb-[calc(8.5rem+env(safe-area-inset-bottom))] space-y-6">
-        <div className="grid grid-cols-3 gap-3">
-          <div className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm">
-            <p className="text-[10px] uppercase font-bold tracking-widest text-slate-400 mb-1">Price</p>
-            <p className="text-lg font-extrabold text-ocean-blue">₱3,500</p>
-            <p className="text-xs text-slate-500">per night</p>
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-xl font-extrabold text-slate-900">Choose a room</h2>
+            <span className="text-xs font-bold text-ocean-blue bg-ocean-blue/10 px-3 py-1 rounded-full uppercase tracking-wider">
+              {availableRooms.length} options
+            </span>
           </div>
-          <div className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm">
-            <p className="text-[10px] uppercase font-bold tracking-widest text-slate-400 mb-1">Check-in</p>
-            <p className="text-lg font-extrabold text-slate-900">2:00 PM</p>
-            <p className="text-xs text-slate-500">standard</p>
+          
+          <div className="flex flex-col gap-4">
+            {availableRooms.map((room) => (
+              <button
+                key={room.id}
+                onClick={() => setSelectedRoomId(room.id)}
+                className={cn(
+                  'group relative overflow-hidden rounded-[2rem] border-2 transition-all duration-300',
+                  selectedRoomId === room.id
+                    ? 'border-ocean-blue bg-white shadow-xl shadow-ocean-blue/10'
+                    : 'border-slate-100 bg-white hover:border-ocean-blue/30 hover:shadow-lg'
+                )}
+              >
+                <div className="flex flex-col sm:flex-row h-full">
+                  <div className="relative h-48 sm:h-auto sm:w-40 overflow-hidden">
+                    <img
+                      src={room.imageUrl ?? resort.imageUrl}
+                      alt={room.name}
+                      className="h-full w-full object-cover transition-transform duration-700 group-hover:scale-110"
+                      referrerPolicy="no-referrer"
+                    />
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent sm:hidden" />
+                    <div className="absolute bottom-3 left-4 text-white sm:hidden">
+                      <p className="font-extrabold text-lg">{room.name}</p>
+                    </div>
+                  </div>
+
+                  <div className="flex-1 p-5 flex flex-col justify-between text-left">
+                    <div>
+                      <div className="hidden sm:flex items-center justify-between mb-1">
+                        <h3 className="font-extrabold text-lg text-slate-900">{room.name}</h3>
+                        {selectedRoomId === room.id && (
+                          <div className="bg-ocean-blue rounded-full p-1 text-white">
+                            <CheckCircle2 size={16} />
+                          </div>
+                        )}
+                      </div>
+                      <p className="text-sm text-slate-500 line-clamp-2 mb-3">{room.description}</p>
+                      
+                      <div className="flex items-center gap-4 text-slate-600">
+                        <div className="flex items-center gap-1.5 bg-slate-50 px-2.5 py-1 rounded-xl">
+                          <Users size={14} className="text-ocean-blue" />
+                          <span className="text-xs font-bold">{room.maxGuests} Guests</span>
+                        </div>
+                        <div className="flex items-center gap-1.5 bg-slate-50 px-2.5 py-1 rounded-xl">
+                          <Shield size={14} className="text-ocean-blue" />
+                          <span className="text-xs font-bold">Included</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 flex items-end justify-between border-t border-slate-50 pt-4">
+                      <div className="flex flex-col">
+                        <span className="text-[10px] uppercase font-bold tracking-widest text-slate-400">Price per night</span>
+                        <div className="flex items-baseline gap-1">
+                          <span className="text-2xl font-black text-ocean-blue">₱{room.pricePerNight.toLocaleString()}</span>
+                        </div>
+                      </div>
+                      {selectedRoomId === room.id ? (
+                        <div className="flex items-center gap-2 text-ocean-blue font-bold text-sm bg-ocean-blue/5 px-4 py-2 rounded-2xl">
+                          <CheckCircle2 size={18} />
+                          Selected
+                        </div>
+                      ) : (
+                        <div className="text-slate-400 font-bold text-sm group-hover:text-ocean-blue transition-colors">
+                          Select Room
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </button>
+            ))}
           </div>
-          <div className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm">
-            <p className="text-[10px] uppercase font-bold tracking-widest text-slate-400 mb-1">Check-out</p>
-            <p className="text-lg font-extrabold text-slate-900">12:00 NN</p>
-            <p className="text-xs text-slate-500">standard</p>
+        </div>
+
+        <div className="bg-ocean-blue/5 rounded-[2.5rem] p-6 border border-ocean-blue/10">
+          <div className="flex items-center gap-4 mb-4">
+            <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center shadow-sm">
+              <CalendarDays className="text-ocean-blue" size={24} />
+            </div>
+            <div>
+              <p className="text-[10px] uppercase font-bold tracking-widest text-ocean-blue/60">Booking Details</p>
+              <p className="font-extrabold text-slate-900">Standard Check-in Policy</p>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="bg-white/60 backdrop-blur-sm rounded-2xl p-4">
+              <p className="text-[10px] uppercase font-bold tracking-widest text-slate-400 mb-1">Check-in</p>
+              <p className="text-lg font-extrabold text-slate-900">2:00 PM</p>
+            </div>
+            <div className="bg-white/60 backdrop-blur-sm rounded-2xl p-4">
+              <p className="text-[10px] uppercase font-bold tracking-widest text-slate-400 mb-1">Check-out</p>
+              <p className="text-lg font-extrabold text-slate-900">12:00 NN</p>
+            </div>
           </div>
         </div>
 
@@ -513,12 +621,15 @@ function ResortDetailScreen({ resort, profile, onBack }: { resort: Resort; profi
                     return;
                   }
 
-                  const amount = nights * 3500;
+                  const amount = nights * selectedRoom.pricePerNight;
 
                   // Create customer record
                   const customer: Customer = {
                     id: Math.random().toString(36).substring(7),
                     resortId: resort.id,
+                    roomId: selectedRoom.id,
+                    roomName: selectedRoom.name,
+                    pricePerNight: selectedRoom.pricePerNight,
                     fullName: customerForm.fullName || profile.fullName,
                     email: customerForm.email || profile.email,
                     phone: customerForm.phone || '',
@@ -541,6 +652,9 @@ function ResortDetailScreen({ resort, profile, onBack }: { resort: Resort; profi
                       userName: profile.fullName,
                       resortId: resort.id,
                       resortName: resort.name,
+                      roomId: selectedRoom.id,
+                      roomName: selectedRoom.name,
+                      pricePerNight: selectedRoom.pricePerNight,
                       checkIn,
                       checkOut,
                       guests,
@@ -636,6 +750,19 @@ function ResortDetailScreen({ resort, profile, onBack }: { resort: Resort; profi
 
 function TransactionHistoryScreen({ profile, onBack }: { profile: UserProfile; onBack: () => void }) {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
+
+  const updateCustomerStatus = useCallback(async (customerId: string, status: Customer['status']) => {
+    try {
+      const currentResortAdmin = storage.getCurrentResortAdmin();
+      const resortId = currentResortAdmin?.resortId || '';
+      await storage.updateCustomerStatusRemote(resortId, customerId, status);
+      setSelectedCustomer((prev) => prev && prev.id === customerId ? { ...prev, status } : prev);
+    } catch (error) {
+      console.error(error);
+      alert('Failed to update customer status');
+    }
+  }, []);
 
   useEffect(() => {
     void storage.getTransactionsRemote(profile.uid).then(setTransactions);
@@ -821,9 +948,45 @@ const Input = ({ label, error, ...props }: React.InputHTMLAttributes<HTMLInputEl
 // --- Main App ---
 
 const MOCK_RESORTS: Resort[] = [
-  { id: '1', name: 'Jc Infinity', imageUrl: '/assets/JC infinity.png', description: 'Luxury beachfront', location: 'Dangay', rating: 4.8 },
-  { id: '2', name: 'Kamayan Penthouse', imageUrl: '/assets/kamayan.png', description: 'Traditional vibes', location: 'Roxas', rating: 4.5 },
-  { id: '3', name: 'La Primera Grande', imageUrl: '/assets/la primera grande.png', description: 'Grand experience', location: 'Dangay', rating: 4.7 },
+  { 
+    id: '1', 
+    name: 'Jc Infinity', 
+    imageUrl: '/assets/JC infinity.png', 
+    description: 'Luxury beachfront', 
+    location: 'Dangay', 
+    rating: 4.8,
+    rooms: [
+      { id: '1-1', name: 'Standard Room', pricePerNight: 850, maxGuests: 2, description: 'Cozy and affordable stay.', imageUrl: '/assets/infinity gallery 1.jpg' },
+      { id: '1-2', name: 'Deluxe Room', pricePerNight: 1650, maxGuests: 3, description: 'Premium view and amenities.', imageUrl: '/assets/infinity gallery 2.jpg' },
+      { id: '1-3', name: 'Infinity Suite', pricePerNight: 2450, maxGuests: 4, description: 'The ultimate luxury experience.', imageUrl: '/assets/infinity gallery 3.jpg' },
+    ]
+  },
+  { 
+    id: '2', 
+    name: 'Kamayan Penthouse', 
+    imageUrl: '/assets/kamayan.png', 
+    description: 'Traditional vibes', 
+    location: 'Roxas', 
+    rating: 4.5,
+    rooms: [
+      { id: '2-1', name: 'Bahay Kubo', pricePerNight: 750, maxGuests: 2, description: 'Traditional Filipino experience.', imageUrl: '/assets/kamayan gallery 1.jpg' },
+      { id: '2-2', name: 'Native Villa', pricePerNight: 1450, maxGuests: 4, description: 'Spacious native-style villa.', imageUrl: '/assets/kamayan gallery 2.jpg' },
+      { id: '2-3', name: 'Penthouse Suite', pricePerNight: 2250, maxGuests: 6, description: 'Top-floor luxury with panoramic views.', imageUrl: '/assets/kamayanan gallery 3.jpg' },
+    ]
+  },
+  { 
+    id: '3', 
+    name: 'La Primera Grande', 
+    imageUrl: '/assets/la primera grande.png', 
+    description: 'Grand experience', 
+    location: 'Dangay', 
+    rating: 4.7,
+    rooms: [
+      { id: '3-1', name: 'Classic Room', pricePerNight: 950, maxGuests: 2, description: 'Elegant and comfortable.', imageUrl: '/assets/primera 1.jpg' },
+      { id: '3-2', name: 'Grand Deluxe', pricePerNight: 1750, maxGuests: 3, description: 'More space, more comfort.', imageUrl: '/assets/primera 2.jpg' },
+      { id: '3-3', name: 'Presidential Suite', pricePerNight: 2500, maxGuests: 5, description: 'Fit for royalty.', imageUrl: '/assets/primera 3.jpg' },
+    ]
+  },
 ];
 
 export default function App() {

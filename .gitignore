@@ -13,3 +13,6 @@ android/*.jks
 *.keystore
 *.jks
 firebase-applet-config.json
+
+.vercel
+.env*.local
