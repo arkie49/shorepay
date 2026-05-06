@@ -43,6 +43,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { QRCodeSVG } from 'qrcode.react';
+import { send } from '@emailjs/browser';
 import { storage } from './services/storage';
 import { type Booking, type Customer, type Merchant, type UserProfile, type Transaction, type Resort, type UserRole } from './types';
 
@@ -142,17 +143,47 @@ const Button = ({
   );
 };
 
-const RESORT_CONTACTS: Record<string, { phone?: string; email?: string; facebook?: string }> = {
-  '1': {},
-  '2': {},
-  '3': {},
+const RESORT_CONTACTS: Record<string, { phone?: string; email?: string; facebook?: string; gcash?: string; maya?: string; card?: string }> = {
+  '1': { gcash: '09123456789', maya: '09171234567', card: 'Pay using the resort card terminal on arrival.' },
+  '2': { gcash: '09987654321', maya: '09179876543', card: 'Pay using the resort card terminal on arrival.' },
+  '3': { gcash: '09112233445', maya: '09171122334', card: 'Pay using the resort card terminal on arrival.' },
 };
 
 // --- Resort Detail Screen ---
 
 function ResortDetailScreen({ resort, profile, onBack }: { resort: Resort; profile: UserProfile; onBack: () => void }) {
+  // ... existing code ...
+
+  const sendConfirmationEmail = async (email: string, referenceNumber: string, resortName: string, amount: number) => {
+    if (!email) {
+      alert('Cannot send confirmation email: customer email is missing.');
+      return false;
+    }
+
+    try {
+      await send(
+        'service_cj3thgh',
+        'template_6o4dazm',
+        {
+          to_email: email,
+          resort_name: resortName,
+          reference_number: referenceNumber,
+          amount: amount,
+          customer_name: profile.fullName,
+        },
+        'eeFfoOPAO_3QCjux1'
+      );
+      console.log('Confirmation email sent successfully');
+      return true;
+    } catch (error) {
+      console.error('Failed to send confirmation email:', error);
+      alert('Booking completed, but email confirmation failed. Check the console or EmailJS settings.');
+      return false;
+    }
+  };
   const [isFavorite, setIsFavorite] = useState(false);
   const [showBooking, setShowBooking] = useState(false);
+  const [showBookingSummary, setShowBookingSummary] = useState(false);
   const [bookingReceipt, setBookingReceipt] = useState<Booking | null>(null);
   const [guests, setGuests] = useState(2);
   const [provider, setProvider] = useState<'GCash' | 'Maya' | 'Card' | null>(null);
@@ -160,6 +191,15 @@ function ResortDetailScreen({ resort, profile, onBack }: { resort: Resort; profi
   const [checkOut, setCheckOut] = useState('');
   const [showAllGallery, setShowAllGallery] = useState(false);
   const [customerForm, setCustomerForm] = useState<Record<string, string>>({});
+  const [showPaymentDetails, setShowPaymentDetails] = useState(false);
+  const [referenceNumber, setReferenceNumber] = useState('');
+  const [imagePreviewIndex, setImagePreviewIndex] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!bookingReceipt) return undefined;
+    const timer = window.setTimeout(() => setBookingReceipt(null), 5000);
+    return () => window.clearTimeout(timer);
+  }, [bookingReceipt]);
 
   const availableRooms = useMemo(() => {
     const rooms = resort.rooms ?? [];
@@ -181,6 +221,10 @@ function ResortDetailScreen({ resort, profile, onBack }: { resort: Resort; profi
     return availableRooms.find((room) => room.id === selectedRoomId) ?? availableRooms[0] ?? { id: 'default', name: 'Standard Room', pricePerNight: 500, maxGuests: 2, description: 'Budget-friendly standard room.', imageUrl: resort.imageUrl };
   }, [availableRooms, selectedRoomId]);
 
+  const maxIncludedGuests = selectedRoom.maxGuests ?? 1;
+  const extraGuestRate = 250;
+  const extraGuests = Math.max(0, guests - maxIncludedGuests);
+  const extraGuestChargePerNight = extraGuests * extraGuestRate;
   const gallery = RESORT_GALLERIES[resort.id] ?? [resort.imageUrl];
   const mapQuery = `${resort.name}, ${resort.location}, Roxas`;
   const mapSrc = `https://www.google.com/maps?q=${encodeURIComponent(mapQuery)}&output=embed`;
@@ -464,8 +508,8 @@ function ResortDetailScreen({ resort, profile, onBack }: { resort: Resort; profi
             {(showAllGallery ? gallery : gallery.slice(0, 6)).map((src, i) => (
               <button
                 key={i}
-                onClick={() => alert('Image preview coming soon!')}
-                className="aspect-square overflow-hidden rounded-2xl bg-slate-100"
+                onClick={() => setImagePreviewIndex(i)}
+                className="aspect-square overflow-hidden rounded-2xl bg-slate-100 hover:opacity-90 transition-opacity cursor-pointer shadow-sm hover:shadow-md"
               >
                 <img src={src} alt="" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
               </button>
@@ -477,10 +521,14 @@ function ResortDetailScreen({ resort, profile, onBack }: { resort: Resort; profi
       <div className="fixed bottom-0 left-1/2 -translate-x-1/2 w-[min(100%,28rem)] bg-white border-t border-slate-100 px-4 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] z-[60]">
         <div className="flex items-center justify-between gap-4">
           <div>
-            <p className="text-xs text-slate-400 font-bold uppercase tracking-widest">Total</p>
+            <p className="text-xs text-slate-400 font-bold uppercase tracking-widest">Price</p>
             <p className="text-xl font-extrabold text-slate-900">
-              ₱3,500 <span className="text-slate-400 text-sm font-semibold">/night</span>
+              ₱{selectedRoom.pricePerNight.toLocaleString()} <span className="text-slate-400 text-sm font-semibold">/night</span>
             </p>
+            <p className="text-xs text-slate-400 mt-1">Fixed rate for up to {maxIncludedGuests} guest{maxIncludedGuests !== 1 ? 's' : ''}</p>
+            {extraGuests > 0 && (
+              <p className="text-xs text-rose-600 mt-1">+₱{extraGuestRate.toLocaleString()} per extra guest</p>
+            )}
           </div>
           <button
             onClick={() => setShowBooking(true)}
@@ -503,7 +551,7 @@ function ResortDetailScreen({ resort, profile, onBack }: { resort: Resort; profi
               initial={{ y: 40, opacity: 0 }}
               animate={{ y: 0, opacity: 1 }}
               exit={{ y: 40, opacity: 0 }}
-              className="bg-white w-full max-w-md mx-auto rounded-t-[40px] p-6"
+              className="bg-white w-full max-w-md mx-auto rounded-t-[40px] p-6 max-h-[80vh] overflow-y-auto"
             >
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-xl font-extrabold">Complete Booking</h3>
@@ -576,7 +624,10 @@ function ResortDetailScreen({ resort, profile, onBack }: { resort: Resort; profi
                     {(['GCash', 'Maya', 'Card'] as const).map(p => (
                       <button
                         key={p}
-                        onClick={() => setProvider(p)}
+                        onClick={() => {
+                          setProvider(p);
+                          setShowPaymentDetails(true);
+                        }}
                         className={cn(
                           "py-3 rounded-2xl font-extrabold text-sm border transition-colors",
                           provider === p ? "bg-ocean-blue text-white border-ocean-blue" : "bg-white text-slate-700 border-slate-200 hover:bg-slate-100"
@@ -587,12 +638,61 @@ function ResortDetailScreen({ resort, profile, onBack }: { resort: Resort; profi
                     ))}
                   </div>
                 </div>
+
+                {showPaymentDetails && (
+                  <div className="bg-slate-50 rounded-3xl p-4 border border-slate-100">
+                    <div className="flex items-center gap-2 text-slate-700 font-bold mb-3">
+                      <Shield size={18} className="text-ocean-blue" />
+                      Payment Details
+                    </div>
+                    <div className="space-y-3">
+                      {provider === 'GCash' && contact.gcash && (
+                        <div className="bg-white rounded-2xl p-4 border border-slate-200">
+                          <p className="text-sm font-bold text-slate-700 mb-1">Resort GCash Number</p>
+                          <p className="text-lg font-extrabold text-ocean-blue">{contact.gcash}</p>
+                          <p className="text-xs text-slate-500 mt-1">Send payment to this number and enter the reference number below.</p>
+                        </div>
+                      )}
+                      {provider === 'Maya' && contact.maya && (
+                        <div className="bg-white rounded-2xl p-4 border border-slate-200">
+                          <p className="text-sm font-bold text-slate-700 mb-1">Resort Maya Number</p>
+                          <p className="text-lg font-extrabold text-ocean-blue">{contact.maya}</p>
+                          <p className="text-xs text-slate-500 mt-1">Send payment to this Maya number and enter the reference number below.</p>
+                        </div>
+                      )}
+                      {provider === 'Card' && (
+                        <div className="bg-white rounded-2xl p-4 border border-slate-200">
+                          <p className="text-sm font-bold text-slate-700 mb-1">Card Payment</p>
+                          <p className="text-lg font-extrabold text-ocean-blue">{contact.card ?? 'Use the resort card terminal on arrival.'}</p>
+                          <p className="text-xs text-slate-500 mt-1">Enter the transaction reference number provided after payment.</p>
+                        </div>
+                      )}
+                      <div>
+                        <label className="block text-sm font-bold text-slate-700 mb-1">
+                          Reference Number
+                        </label>
+                        <input
+                          type="text"
+                          value={referenceNumber}
+                          onChange={e => setReferenceNumber(e.target.value)}
+                          className="w-full px-4 py-3 rounded-2xl bg-white border border-slate-200 outline-none focus:border-ocean-blue font-bold"
+                          placeholder="Enter payment reference number"
+                          required
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
 
               <button
-                onClick={async () => {
+                onClick={() => {
                   if (!provider) {
                     alert('Select a payment method.');
+                    return;
+                  }
+                  if (showPaymentDetails && !referenceNumber.trim()) {
+                    alert('Please enter the reference number.');
                     return;
                   }
                   if (!checkIn || !checkOut) {
@@ -621,59 +721,12 @@ function ResortDetailScreen({ resort, profile, onBack }: { resort: Resort; profi
                     return;
                   }
 
-                  const amount = nights * selectedRoom.pricePerNight;
-
-                  // Create customer record
-                  const customer: Customer = {
-                    id: Math.random().toString(36).substring(7),
-                    resortId: resort.id,
-                    roomId: selectedRoom.id,
-                    roomName: selectedRoom.name,
-                    pricePerNight: selectedRoom.pricePerNight,
-                    fullName: customerForm.fullName || profile.fullName,
-                    email: customerForm.email || profile.email,
-                    phone: customerForm.phone || '',
-                    address: customerForm.address || '',
-                    checkIn,
-                    checkOut,
-                    guests,
-                    paymentMethod: provider,
-                    amount,
-                    createdAt: new Date().toISOString(),
-                    status: 'confirmed'
-                  };
-
-                  try {
-                    await storage.addCustomerRemote(customer);
-                    
-                    // Also create a booking for the user's history
-                    const booking = storage.addBooking({
-                      userUid: profile.uid,
-                      userName: profile.fullName,
-                      resortId: resort.id,
-                      resortName: resort.name,
-                      roomId: selectedRoom.id,
-                      roomName: selectedRoom.name,
-                      pricePerNight: selectedRoom.pricePerNight,
-                      checkIn,
-                      checkOut,
-                      guests,
-                      provider,
-                      amount,
-                      createdAt: new Date().toISOString(),
-                    });
-                    void storage.addBookingRemote(booking).catch(() => {});
-
-                    setShowBooking(false);
-                    setBookingReceipt(booking);
-                    setCustomerForm({}); // Reset form
-                  } catch (error) {
-                    alert('Failed to complete booking. Please try again.');
-                  }
+                  // Show summary instead of confirming
+                  setShowBookingSummary(true);
                 }}
                 className="w-full mt-6 bg-ocean-blue text-white py-4 rounded-2xl font-extrabold text-lg hover:bg-ocean-blue/90 transition-all active:scale-95"
               >
-                Confirm Booking
+                Review Booking
               </button>
             </motion.div>
           </motion.div>
@@ -683,61 +736,302 @@ function ResortDetailScreen({ resort, profile, onBack }: { resort: Resort; profi
       <AnimatePresence>
         {bookingReceipt && (
           <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 20 }}
+            className="fixed bottom-6 left-1/2 z-[130] w-[min(100%,28rem)] -translate-x-1/2"
+          >
+            <div className="rounded-[32px] bg-emerald-600 px-6 py-5 text-white shadow-2xl shadow-emerald-500/30">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-sm uppercase tracking-[0.24em] font-bold text-emerald-200">Booking Successful</p>
+                  <p className="mt-2 text-lg font-extrabold">Your booking at {bookingReceipt.resortName} is confirmed.</p>
+                  <p className="mt-1 text-sm text-emerald-100">Reference: {bookingReceipt.referenceNumber || 'N/A'}</p>
+                </div>
+                <button
+                  onClick={() => setBookingReceipt(null)}
+                  className="rounded-full bg-white/15 p-2 text-white hover:bg-white/25 transition-colors"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {showBookingSummary && checkIn && checkOut && (
+          <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[130] bg-black/60 backdrop-blur-sm flex items-end"
+            className="fixed inset-0 z-[150] bg-black/60 backdrop-blur-sm flex items-end"
           >
             <motion.div
               initial={{ y: 40, opacity: 0 }}
               animate={{ y: 0, opacity: 1 }}
               exit={{ y: 40, opacity: 0 }}
-              className="bg-white w-full max-w-md mx-auto rounded-t-[40px] p-6"
+              className="bg-white w-full max-w-md mx-auto rounded-t-[40px] p-6 max-h-[80vh] overflow-y-auto"
             >
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-xl font-extrabold">Booking Confirmed</h3>
+              <div className="flex items-center justify-between mb-6">
+                <h3 className="text-2xl font-extrabold">Booking Summary</h3>
                 <button
-                  onClick={() => setBookingReceipt(null)}
+                  onClick={() => setShowBookingSummary(false)}
                   className="w-10 h-10 bg-slate-100 rounded-full flex items-center justify-center text-slate-600 hover:bg-slate-200 transition-colors"
                 >
                   <X size={20} />
                 </button>
               </div>
 
-              <div className="bg-slate-50 rounded-3xl p-5 border border-slate-100 mb-4">
-                <p className="text-xs text-slate-400 uppercase font-bold tracking-widest">Resort</p>
-                <p className="text-lg font-extrabold text-slate-900">{bookingReceipt.resortName}</p>
-                <p className="text-sm text-slate-500 mt-1">
-                  {new Date(bookingReceipt.checkIn).toLocaleDateString()} - {new Date(bookingReceipt.checkOut).toLocaleDateString()} • {bookingReceipt.guests} guest{bookingReceipt.guests !== 1 ? 's' : ''}
-                </p>
-                <p className="text-sm text-slate-500 mt-1">Paid via {bookingReceipt.provider}</p>
-                <p className="text-xl font-extrabold text-ocean-blue mt-3">₱{bookingReceipt.amount.toLocaleString()}</p>
-              </div>
-
-              <div className="bg-white rounded-3xl border border-slate-100 overflow-hidden mb-4">
-                <div className="p-5 border-b border-slate-100">
-                  <p className="text-xs text-slate-400 uppercase font-bold tracking-widest">Booking QR</p>
-                  <p className="text-sm text-slate-500">Show this at the resort for verification.</p>
+              <div className="space-y-4">
+                {/* Resort & Room */}
+                <div className="bg-slate-50 rounded-3xl p-4 border border-slate-100">
+                  <p className="text-xs text-slate-500 uppercase font-bold tracking-widest mb-2">Resort</p>
+                  <p className="text-lg font-extrabold text-slate-900 mb-3">{resort.name}</p>
+                  <div className="bg-white rounded-2xl p-3 border border-slate-100">
+                    <p className="text-xs text-slate-500 font-bold mb-1">Room</p>
+                    <p className="font-extrabold text-slate-900">{selectedRoom.name}</p>
+                    <p className="text-xs text-slate-500 mt-1">₱{selectedRoom.pricePerNight.toLocaleString()}/night</p>
+                    <p className="text-xs text-slate-500 mt-1">Fixed rate for up to {maxIncludedGuests} guest{maxIncludedGuests !== 1 ? 's' : ''}</p>
+                    {extraGuests > 0 && (
+                      <p className="text-xs text-rose-600 mt-1">+₱{extraGuestRate.toLocaleString()} per extra guest</p>
+                    )}
+                  </div>
                 </div>
-                <div className="p-6 flex items-center justify-center">
-                  <div className="p-4 bg-slate-50 rounded-[28px] border border-slate-100">
-                    <QRCodeSVG value={`shorepay://booking?bookingId=${encodeURIComponent(bookingReceipt.id)}&resortId=${encodeURIComponent(bookingReceipt.resortId)}`} size={170} />
+                {/* Dates & Guests */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-slate-50 rounded-2xl p-4 border border-slate-100">
+                    <p className="text-xs text-slate-500 uppercase font-bold tracking-widest mb-1">Check-In</p>
+                    <p className="font-extrabold text-slate-900">{new Date(checkIn).toLocaleDateString('en-PH', { month: 'short', day: 'numeric' })}</p>
+                  </div>
+                  <div className="bg-slate-50 rounded-2xl p-4 border border-slate-100">
+                    <p className="text-xs text-slate-500 uppercase font-bold tracking-widest mb-1">Check-Out</p>
+                    <p className="font-extrabold text-slate-900">{new Date(checkOut).toLocaleDateString('en-PH', { month: 'short', day: 'numeric' })}</p>
+                  </div>
+                </div>
+
+                <div className="bg-slate-50 rounded-2xl p-4 border border-slate-100">
+                  <p className="text-xs text-slate-500 uppercase font-bold tracking-widest mb-1">Guests</p>
+                  <p className="font-extrabold text-slate-900">{guests} Person{guests !== 1 ? 's' : ''}</p>
+                </div>
+
+                {/* Customer Info */}
+                <div className="bg-slate-50 rounded-3xl p-4 border border-slate-100">
+                  <p className="text-xs text-slate-500 uppercase font-bold tracking-widest mb-3">Guest Information</p>
+                  <div className="space-y-2 text-sm">
+                    <div>
+                      <p className="text-xs text-slate-500 font-bold">Name</p>
+                      <p className="font-semibold text-slate-900">{customerForm.fullName || profile.fullName}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-slate-500 font-bold">Email</p>
+                      <p className="font-semibold text-slate-700">{customerForm.email || profile.email}</p>
+                    </div>
+                    {customerForm.phone && (
+                      <div>
+                        <p className="text-xs text-slate-500 font-bold">Phone</p>
+                        <p className="font-semibold text-slate-700">{customerForm.phone}</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Payment Info */}
+                <div className="bg-slate-50 rounded-3xl p-4 border border-slate-100">
+                  <p className="text-xs text-slate-500 uppercase font-bold tracking-widest mb-2">Payment Method</p>
+                  <p className="text-lg font-extrabold text-ocean-blue mb-2">{provider}</p>
+                  {referenceNumber && (
+                    <div className="bg-white rounded-2xl p-3 border border-slate-100">
+                      <p className="text-xs text-slate-500 font-bold mb-1">Reference Number</p>
+                      <p className="font-extrabold text-slate-900">{referenceNumber}</p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Price Breakdown */}
+                <div className="bg-gradient-to-br from-ocean-blue/5 to-ocean-blue/10 rounded-3xl p-4 border border-ocean-blue/20">
+                  <p className="text-xs text-ocean-blue uppercase font-bold tracking-widest mb-3">Price Breakdown</p>
+                  <div className="space-y-2 text-sm mb-4">
+                    <div className="flex justify-between">
+                      <span className="text-slate-600">Base rate</span>
+                      <span className="font-bold text-slate-900">
+                        ₱{selectedRoom.pricePerNight.toLocaleString()} × {Math.ceil((new Date(checkOut).getTime() - new Date(checkIn).getTime()) / (1000 * 60 * 60 * 24))} nights
+                      </span>
+                    </div>
+                    {extraGuests > 0 && (
+                      <div className="flex justify-between">
+                        <span className="text-slate-600">Extra guests ({extraGuests})</span>
+                        <span className="font-bold text-slate-900">
+                          ₱{(extraGuestRate * extraGuests).toLocaleString()} × {Math.ceil((new Date(checkOut).getTime() - new Date(checkIn).getTime()) / (1000 * 60 * 60 * 24))} nights
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                  <div className="border-t border-ocean-blue/20 pt-3 flex justify-between items-end">
+                    <p className="text-xs text-ocean-blue uppercase font-bold tracking-widest">Total Amount</p>
+                    <p className="text-2xl font-black text-ocean-blue">
+                      ₱{(
+                        (selectedRoom.pricePerNight + extraGuestChargePerNight) *
+                        Math.ceil((new Date(checkOut).getTime() - new Date(checkIn).getTime()) / (1000 * 60 * 60 * 24))
+                      ).toLocaleString()}
+                    </p>
                   </div>
                 </div>
               </div>
 
-              <div className="bg-slate-50 rounded-3xl p-5 border border-slate-100">
-                <p className="text-xs text-slate-400 uppercase font-bold tracking-widest mb-2">Resort Contact</p>
-                {contact.phone || contact.email || contact.facebook ? (
-                  <div className="space-y-2">
-                    {contact.phone && <p className="text-sm font-bold text-slate-900">Phone: {contact.phone}</p>}
-                    {contact.email && <p className="text-sm font-bold text-slate-900 break-all">Email: {contact.email}</p>}
-                    {contact.facebook && <p className="text-sm font-bold text-slate-900 break-all">Facebook: {contact.facebook}</p>}
-                  </div>
-                ) : (
-                  <p className="text-sm text-slate-500">No contact details provided.</p>
-                )}
+              <div className="grid grid-cols-2 gap-3 mt-6">
+                <button
+                  onClick={() => setShowBookingSummary(false)}
+                  className="bg-slate-100 text-slate-900 py-3 rounded-2xl font-extrabold hover:bg-slate-200 transition-all"
+                >
+                  Go Back
+                </button>
+                <button
+                  onClick={async () => {
+                    const checkInDate = new Date(checkIn);
+                    const checkOutDate = new Date(checkOut);
+                    const nights = Math.ceil((checkOutDate.getTime() - checkInDate.getTime()) / (1000 * 60 * 60 * 24));
+                    const amount = nights * (selectedRoom.pricePerNight + extraGuestChargePerNight);
+
+                    // Create customer record
+                    const customer: Customer = {
+                      id: Math.random().toString(36).substring(7),
+                      resortId: resort.id,
+                      roomId: selectedRoom.id,
+                      roomName: selectedRoom.name,
+                      pricePerNight: selectedRoom.pricePerNight + extraGuestChargePerNight,
+                      basePricePerNight: selectedRoom.pricePerNight,
+                      extraGuests,
+                      extraGuestRate,
+                      fullName: customerForm.fullName || profile.fullName,
+                      email: customerForm.email || profile.email,
+                      phone: customerForm.phone || '',
+                      address: customerForm.address || '',
+                      checkIn,
+                      checkOut,
+                      guests,
+                      paymentMethod: provider!,
+                      amount,
+                      referenceNumber: referenceNumber || undefined,
+                      createdAt: new Date().toISOString(),
+                      status: 'confirmed'
+                    };
+
+                    try {
+                      await storage.addCustomerRemote(customer);
+                      
+                      // Also create a booking for the user's history
+                      const booking = storage.addBooking({
+                        userUid: profile.uid,
+                        userName: profile.fullName,
+                        resortId: resort.id,
+                        resortName: resort.name,
+                        roomId: selectedRoom.id,
+                        roomName: selectedRoom.name,
+                        pricePerNight: selectedRoom.pricePerNight + extraGuestChargePerNight,
+                        basePricePerNight: selectedRoom.pricePerNight,
+                        extraGuests,
+                        extraGuestRate,
+                        checkIn,
+                        checkOut,
+                        guests,
+                        provider: provider!,
+                        amount,
+                        referenceNumber: referenceNumber || undefined,
+                        createdAt: new Date().toISOString(),
+                      });
+                      await storage.addBookingRemote(booking);
+
+                      setShowBooking(false);
+                      setShowBookingSummary(false);
+                      setBookingReceipt(booking);
+                      setCustomerForm({});
+                      setProvider(null);
+                      setShowPaymentDetails(false);
+                      setReferenceNumber('');
+                      setCheckIn('');
+                      setCheckOut('');
+                      setGuests(2);
+
+                      // Send confirmation email
+                      const emailSent = await sendConfirmationEmail(customerForm.email || profile.email, referenceNumber, resort.name, amount);
+                      if (emailSent) {
+                        alert(`Booking confirmed! Reference number ${referenceNumber} sent to ${customerForm.email || profile.email}`);
+                      } else {
+                        alert(`Booking confirmed! Reference number ${referenceNumber} saved, but email confirmation could not be sent.`);
+                      }
+                    } catch (error) {
+                      console.error('Error saving booking:', error);
+                      alert('Failed to complete booking. Please try again.');
+                    }
+                  }}
+                  className="bg-ocean-blue text-white py-3 rounded-2xl font-extrabold hover:bg-ocean-blue/90 transition-all"
+                >
+                  Confirm
+                </button>
               </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {imagePreviewIndex !== null && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[200] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
+            onClick={() => setImagePreviewIndex(null)}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              onClick={(e) => e.stopPropagation()}
+              className="relative w-full max-w-3xl max-h-[80vh] flex flex-col"
+            >
+              <img
+                src={gallery[imagePreviewIndex]}
+                alt={`${resort.name} - Image ${imagePreviewIndex + 1}`}
+                className="w-full h-full object-contain rounded-3xl shadow-2xl"
+                referrerPolicy="no-referrer"
+              />
+
+              <div className="absolute top-4 right-4 flex gap-2">
+                <button
+                  onClick={() => setImagePreviewIndex(null)}
+                  className="w-10 h-10 bg-white/20 hover:bg-white/30 backdrop-blur-md rounded-full flex items-center justify-center text-white transition-colors"
+                  aria-label="Close preview"
+                >
+                  <X size={24} />
+                </button>
+              </div>
+
+              {gallery.length > 1 && (
+                <>
+                  <button
+                    onClick={() => setImagePreviewIndex((imagePreviewIndex - 1 + gallery.length) % gallery.length)}
+                    className="absolute left-4 top-1/2 -translate-y-1/2 w-10 h-10 bg-white/20 hover:bg-white/30 backdrop-blur-md rounded-full flex items-center justify-center text-white transition-colors"
+                    aria-label="Previous image"
+                  >
+                    <ArrowLeft size={20} />
+                  </button>
+
+                  <button
+                    onClick={() => setImagePreviewIndex((imagePreviewIndex + 1) % gallery.length)}
+                    className="absolute right-4 top-1/2 -translate-y-1/2 w-10 h-10 bg-white/20 hover:bg-white/30 backdrop-blur-md rounded-full flex items-center justify-center text-white transition-colors"
+                    aria-label="Next image"
+                  >
+                    <ArrowLeft size={20} className="rotate-180" />
+                  </button>
+
+                  <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-white/20 backdrop-blur-md px-4 py-2 rounded-full">
+                    <span className="text-white text-xs font-bold">{imagePreviewIndex + 1} / {gallery.length}</span>
+                  </div>
+                </>
+              )}
             </motion.div>
           </motion.div>
         )}
@@ -750,6 +1044,7 @@ function ResortDetailScreen({ resort, profile, onBack }: { resort: Resort; profi
 
 function TransactionHistoryScreen({ profile, onBack }: { profile: UserProfile; onBack: () => void }) {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [bookings, setBookings] = useState<Booking[]>([]);
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
 
   const updateCustomerStatus = useCallback(async (customerId: string, status: Customer['status']) => {
@@ -764,8 +1059,19 @@ function TransactionHistoryScreen({ profile, onBack }: { profile: UserProfile; o
     }
   }, []);
 
+  const deleteTransaction = useCallback((transactionId: string) => {
+    setTransactions(prev => prev.filter(tx => tx.id !== transactionId));
+  }, []);
+
+  const deleteBooking = useCallback((bookingId: string) => {
+    setBookings(prev => prev.filter(booking => booking.id !== bookingId));
+  }, []);
+
   useEffect(() => {
     void storage.getTransactionsRemote(profile.uid).then(setTransactions);
+    void storage.getBookingsRemote().then((allBookings) => {
+      setBookings(allBookings.filter((booking) => booking.userUid === profile.uid));
+    });
   }, [profile.uid]);
 
   return (
@@ -781,28 +1087,94 @@ function TransactionHistoryScreen({ profile, onBack }: { profile: UserProfile; o
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
-        {transactions.map(tx => (
-          <div key={tx.id} className="bg-white p-4 rounded-2xl shadow-sm flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <div className={cn(
-                "w-12 h-12 rounded-xl flex items-center justify-center",
-                tx.type === 'payment' ? "bg-blue-100 text-blue-600" : "bg-emerald-100 text-emerald-600"
-              )}>
-                {tx.type === 'payment' ? <Store size={20} /> : <Plus size={20} />}
-              </div>
-              <div>
-                <p className="font-bold text-slate-900">{tx.merchantName || 'ShorePay User'}</p>
-                <p className="text-xs text-slate-500">{new Date(tx.timestamp).toLocaleDateString()} • {new Date(tx.timestamp).toLocaleTimeString()}</p>
-              </div>
+        <div className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <p className="text-xs uppercase tracking-[0.24em] font-bold text-slate-400">Transactions</p>
+              <h2 className="text-xl font-extrabold text-slate-900">Recent Activity</h2>
             </div>
-            <p className={cn(
-              "font-bold",
-              tx.type === 'cash-in' ? "text-emerald-600" : "text-slate-900"
-            )}>
-              {(tx.type === 'cash-in' ? '+' : tx.type === 'withdraw' ? '-' : tx.fromUid === profile.uid ? '-' : '+')}₱{tx.amount.toLocaleString()}
-            </p>
+            <span className="text-sm font-bold text-ocean-blue">{transactions.length} items</span>
           </div>
-        ))}
+          <div className="space-y-3">
+            {transactions.length === 0 ? (
+              <p className="text-sm text-slate-500">No transactions yet.</p>
+            ) : (
+              transactions.map(tx => (
+                <div key={tx.id} className="bg-slate-50 rounded-3xl p-4 flex items-center justify-between">
+                  <div className="flex items-center gap-4">
+                    <div className={cn(
+                      "w-12 h-12 rounded-xl flex items-center justify-center",
+                      tx.type === 'payment' ? "bg-blue-100 text-blue-600" : "bg-emerald-100 text-emerald-600"
+                    )}>
+                      {tx.type === 'payment' ? <Store size={20} /> : <Plus size={20} />}
+                    </div>
+                    <div>
+                      <p className="font-bold text-slate-900">{tx.merchantName || 'ShorePay User'}</p>
+                      <p className="text-xs text-slate-500">{new Date(tx.timestamp).toLocaleDateString()} • {new Date(tx.timestamp).toLocaleTimeString()}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <p className={cn(
+                      "font-bold",
+                      tx.type === 'cash-in' ? "text-emerald-600" : "text-slate-900"
+                    )}>
+                      {(tx.type === 'cash-in' ? '+' : tx.type === 'withdraw' ? '-' : tx.fromUid === profile.uid ? '-' : '+')}₱{tx.amount.toLocaleString()}
+                    </p>
+                    <button
+                      onClick={() => deleteTransaction(tx.id)}
+                      className="w-8 h-8 bg-red-100 text-red-600 rounded-full flex items-center justify-center hover:bg-red-200 transition-colors"
+                      title="Delete transaction"
+                    >
+                      <X size={16} />
+                    </button>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+
+        <div className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <p className="text-xs uppercase tracking-[0.24em] font-bold text-slate-400">Bookings</p>
+              <h2 className="text-xl font-extrabold text-slate-900">My Bookings</h2>
+            </div>
+            <span className="text-sm font-bold text-orange-500">{bookings.length} reservations</span>
+          </div>
+          <div className="space-y-3">
+            {bookings.length === 0 ? (
+              <p className="text-sm text-slate-500">No booking records found for this account.</p>
+            ) : (
+              bookings.map((booking) => (
+                <div key={booking.id} className="bg-slate-50 rounded-3xl p-4 border border-slate-100">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="space-y-1 flex-1">
+                      <p className="text-sm font-bold text-slate-900">{booking.resortName}</p>
+                      <p className="text-xs text-slate-500">{booking.checkIn} → {booking.checkOut} • {booking.guests} guest{booking.guests !== 1 ? 's' : ''}</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <p className="text-right text-sm text-slate-500">
+                        {booking.provider}
+                      </p>
+                      <button
+                        onClick={() => deleteBooking(booking.id)}
+                        className="w-8 h-8 bg-red-100 text-red-600 rounded-full flex items-center justify-center hover:bg-red-200 transition-colors"
+                        title="Delete booking"
+                      >
+                        <X size={16} />
+                      </button>
+                    </div>
+                  </div>
+                  <div className="mt-3 flex items-center justify-between gap-2 text-slate-700">
+                    <p className="text-sm">Reference: {booking.referenceNumber || 'N/A'}</p>
+                    <p className="font-bold text-slate-900">₱{booking.amount.toLocaleString()}</p>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
       </div>
 
       <AnimatePresence>
@@ -955,6 +1327,7 @@ const MOCK_RESORTS: Resort[] = [
     description: 'Luxury beachfront', 
     location: 'Dangay', 
     rating: 4.8,
+    registrationFields: ['fullName', 'email', 'phone', 'address', 'checkIn', 'checkOut', 'guests'],
     rooms: [
       { id: '1-1', name: 'Standard Room', pricePerNight: 850, maxGuests: 2, description: 'Cozy and affordable stay.', imageUrl: '/assets/infinity gallery 1.jpg' },
       { id: '1-2', name: 'Deluxe Room', pricePerNight: 1650, maxGuests: 3, description: 'Premium view and amenities.', imageUrl: '/assets/infinity gallery 2.jpg' },
@@ -968,6 +1341,7 @@ const MOCK_RESORTS: Resort[] = [
     description: 'Traditional vibes', 
     location: 'Roxas', 
     rating: 4.5,
+    registrationFields: ['fullName', 'email', 'phone', 'address', 'checkIn', 'checkOut', 'guests', 'specialRequests'],
     rooms: [
       { id: '2-1', name: 'Bahay Kubo', pricePerNight: 750, maxGuests: 2, description: 'Traditional Filipino experience.', imageUrl: '/assets/kamayan gallery 1.jpg' },
       { id: '2-2', name: 'Native Villa', pricePerNight: 1450, maxGuests: 4, description: 'Spacious native-style villa.', imageUrl: '/assets/kamayan gallery 2.jpg' },
@@ -981,6 +1355,7 @@ const MOCK_RESORTS: Resort[] = [
     description: 'Grand experience', 
     location: 'Dangay', 
     rating: 4.7,
+    registrationFields: ['fullName', 'email', 'phone', 'address', 'checkIn', 'checkOut', 'guests', 'mealPlan'],
     rooms: [
       { id: '3-1', name: 'Classic Room', pricePerNight: 950, maxGuests: 2, description: 'Elegant and comfortable.', imageUrl: '/assets/primera 1.jpg' },
       { id: '3-2', name: 'Grand Deluxe', pricePerNight: 1750, maxGuests: 3, description: 'More space, more comfort.', imageUrl: '/assets/primera 2.jpg' },
@@ -3114,7 +3489,7 @@ function AdminDashboard({ profile }: { profile: UserProfile }) {
       setUsers(remoteUsers.length ? remoteUsers : storage.getUsers());
       setTransactions(remoteTransactions.length ? remoteTransactions : storage.get('shorepay_transactions', []));
       setMerchants(remoteMerchants.length ? remoteMerchants : storage.get('shorepay_merchants', []));
-      setBookings(remoteBookings);
+      setBookings(remoteBookings.length ? remoteBookings : storage.getBookings());
       setLastSyncedAt(new Date().toISOString());
     } catch (error) {
       console.error('Error loading admin data:', error);
@@ -3208,11 +3583,22 @@ function AdminDashboard({ profile }: { profile: UserProfile }) {
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }, [bookings, bookingQuery]);
 
-  const downloadCsv = useCallback((filename: string, rows: Array<Record<string, any>>) => {
+  const recentPayments = useMemo(() =>
+    [...transactions]
+      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+      .slice(0, 4),
+    [transactions]
+  );
+
+  const recentBookings = useMemo(() =>
+    [...bookings]
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      .slice(0, 4),
+    [bookings]
+  );
+
+  const downloadCsv = useCallback((filename: string, headers: string[], rows: Array<Record<string, any>>) => {
     const escape = (v: any) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-    const headersSet = new Set<string>();
-    for (const r of rows) for (const k of Object.keys(r)) headersSet.add(k);
-    const headers = Array.from(headersSet);
     const csv = [headers.join(','), ...rows.map((r) => headers.map((h) => escape(r[h])).join(','))].join('\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
@@ -3228,16 +3614,27 @@ function AdminDashboard({ profile }: { profile: UserProfile }) {
   const exportTransactions = useCallback(() => {
     downloadCsv(
       `shorepay-transactions-${new Date().toISOString().slice(0, 10)}.csv`,
+      [
+        'Transaction ID',
+        'Timestamp',
+        'Type',
+        'Status',
+        'Amount',
+        'From UID',
+        'To UID',
+        'Merchant',
+        'Description',
+      ],
       filteredTransactions.map((t) => ({
-        id: t.id,
-        fromUid: t.fromUid,
-        toUid: t.toUid,
-        amount: t.amount,
-        type: t.type,
-        status: t.status,
-        timestamp: t.timestamp,
-        merchantName: t.merchantName ?? '',
-        description: t.description ?? '',
+        'Transaction ID': t.id,
+        'Timestamp': new Date(t.timestamp).toLocaleString(),
+        'Type': t.type,
+        'Status': t.status,
+        'Amount': `₱${t.amount.toLocaleString()}`,
+        'From UID': t.fromUid,
+        'To UID': t.toUid,
+        'Merchant': t.merchantName ?? '',
+        'Description': t.description ?? '',
       }))
     );
   }, [downloadCsv, filteredTransactions]);
@@ -3245,18 +3642,33 @@ function AdminDashboard({ profile }: { profile: UserProfile }) {
   const exportBookings = useCallback(() => {
     downloadCsv(
       `shorepay-bookings-${new Date().toISOString().slice(0, 10)}.csv`,
+      [
+        'Booking ID',
+        'Created At',
+        'User UID',
+        'User Name',
+        'Resort ID',
+        'Resort Name',
+        'Check-In',
+        'Check-Out',
+        'Guests',
+        'Payment Provider',
+        'Amount',
+        'Reference Number',
+      ],
       filteredBookings.map((b) => ({
-        id: b.id,
-        userUid: b.userUid,
-        userName: b.userName,
-        resortId: b.resortId,
-        resortName: b.resortName,
-        checkIn: b.checkIn,
-        checkOut: b.checkOut,
-        guests: b.guests,
-        provider: b.provider,
-        amount: b.amount,
-        createdAt: b.createdAt,
+        'Booking ID': b.id,
+        'Created At': new Date(b.createdAt).toLocaleString(),
+        'User UID': b.userUid,
+        'User Name': b.userName,
+        'Resort ID': b.resortId,
+        'Resort Name': b.resortName,
+        'Check-In': new Date(b.checkIn).toLocaleDateString(),
+        'Check-Out': new Date(b.checkOut).toLocaleDateString(),
+        'Guests': b.guests,
+        'Payment Provider': b.provider ?? 'ShorePay',
+        'Amount': `₱${b.amount.toLocaleString()}`,
+        'Reference Number': b.referenceNumber ?? '',
       }))
     );
   }, [downloadCsv, filteredBookings]);
@@ -3313,13 +3725,13 @@ function AdminDashboard({ profile }: { profile: UserProfile }) {
       </div>
 
       {/* Navigation Tabs */}
-      <div className="flex gap-2 overflow-x-auto">
+      <div className="flex gap-2 overflow-x-auto pb-1">
         {[
           { id: 'overview', label: 'Overview', icon: <BarChart3 size={16} /> },
-          { id: 'users', label: 'Users', icon: <Users size={16} /> },
-          { id: 'transactions', label: 'Transactions', icon: <ArrowUpRight size={16} /> },
-          { id: 'merchants', label: 'Merchants', icon: <Store size={16} /> },
-          { id: 'bookings', label: 'Bookings', icon: <CalendarDays size={16} /> },
+          { id: 'users', label: `Users (${totalUsers})`, icon: <Users size={16} /> },
+          { id: 'transactions', label: `Transactions (${transactions.length})`, icon: <ArrowUpRight size={16} /> },
+          { id: 'merchants', label: `Merchants (${totalMerchants})`, icon: <Store size={16} /> },
+          { id: 'bookings', label: `Bookings (${totalBookings})`, icon: <CalendarDays size={16} /> },
         ].map((tab) => (
           <button
             key={tab.id}
@@ -3339,9 +3751,8 @@ function AdminDashboard({ profile }: { profile: UserProfile }) {
 
       {/* Overview Section */}
       {activeSection === 'overview' && (
-        <div className="space-y-6">
-          {/* Stats Cards */}
-          <div className="grid grid-cols-2 gap-4">
+        <div className="grid gap-6 xl:grid-cols-[minmax(640px,1fr)_360px]">
+          <div className="grid gap-4 sm:grid-cols-2">
             <div className="bg-white rounded-[24px] p-6 border border-slate-100">
               <div className="flex items-center gap-3 mb-2">
                 <div className="w-10 h-10 bg-ocean-blue/10 rounded-full flex items-center justify-center">
@@ -3435,33 +3846,78 @@ function AdminDashboard({ profile }: { profile: UserProfile }) {
             </div>
           </div>
 
-          {/* Recent Activity */}
-          <div className="bg-white rounded-[32px] border border-slate-100 shadow-sm overflow-hidden">
-            <div className="p-6 border-b border-slate-100">
-              <h3 className="text-lg font-extrabold">Recent Activity</h3>
-              <p className="text-sm text-slate-500">Latest transactions and bookings</p>
+          <div className="space-y-4">
+            <div className="bg-white rounded-[32px] border border-slate-100 shadow-sm overflow-hidden">
+              <div className="p-6 border-b border-slate-100">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <h3 className="text-lg font-extrabold">Latest Payments</h3>
+                    <p className="text-sm text-slate-500">Most recent confirmed transactions</p>
+                  </div>
+                  <span className="text-xs uppercase font-bold tracking-widest text-slate-400">{recentPayments.length} items</span>
+                </div>
+              </div>
+              <div className="divide-y divide-slate-100 max-h-72 overflow-y-auto">
+                {recentPayments.length === 0 ? (
+                  <div className="p-6 text-center text-slate-400">
+                    No payments available yet.
+                  </div>
+                ) : (
+                  recentPayments.map((tx) => (
+                    <div key={tx.id} className="p-5 flex items-center justify-between gap-4">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 bg-slate-100 rounded-full flex items-center justify-center">
+                          <ArrowUpRight size={16} className={cn(
+                            tx.type === 'payment' ? "text-green-500" :
+                            tx.type === 'cash-in' ? "text-blue-500" :
+                            "text-red-500"
+                          )} />
+                        </div>
+                        <div>
+                          <p className="font-bold text-slate-900">₱{tx.amount.toLocaleString()}</p>
+                          <p className="text-xs text-slate-500">{tx.fromUid} → {tx.toUid}</p>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-xs text-slate-500 capitalize">{tx.type}</p>
+                        <p className="text-[11px] text-slate-400">{new Date(tx.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
             </div>
 
-            <div className="divide-y divide-slate-100 max-h-96 overflow-y-auto">
-              {[...transactions.slice(0, 5), ...bookings.slice(0, 3)].sort((a, b) =>
-                new Date(b.timestamp || b.createdAt).getTime() - new Date(a.timestamp || a.createdAt).getTime()
-              ).map((item: any) => (
-                <div key={item.id} className="p-5 flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 bg-slate-100 rounded-full flex items-center justify-center">
-                      {item.amount ? <ArrowUpRight size={16} className="text-green-500" /> : <CalendarDays size={16} className="text-orange-500" />}
-                    </div>
-                    <div>
-                      <p className="font-extrabold text-slate-900">
-                        {item.amount ? `₱${item.amount.toLocaleString()}` : `Booking: ${item.resortName}`}
-                      </p>
-                      <p className="text-xs text-slate-500">
-                        {item.fromUid ? `${item.fromUid} → ${item.toUid}` : item.userName} • {new Date(item.timestamp || item.createdAt).toLocaleString()}
-                      </p>
-                    </div>
+            <div className="bg-white rounded-[32px] border border-slate-100 shadow-sm overflow-hidden">
+              <div className="p-6 border-b border-slate-100">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <h3 className="text-lg font-extrabold">Recent Bookings</h3>
+                    <p className="text-sm text-slate-500">Latest resort reservations</p>
                   </div>
+                  <span className="text-xs uppercase font-bold tracking-widest text-slate-400">{recentBookings.length} entries</span>
                 </div>
-              ))}
+              </div>
+              <div className="divide-y divide-slate-100 max-h-72 overflow-y-auto">
+                {recentBookings.length === 0 ? (
+                  <div className="p-6 text-center text-slate-400">
+                    No booking records yet.
+                  </div>
+                ) : (
+                  recentBookings.map((booking) => (
+                    <div key={booking.id} className="p-5 flex items-center justify-between gap-4">
+                      <div>
+                        <p className="font-bold text-slate-900">{booking.userName}</p>
+                        <p className="text-xs text-slate-500">{booking.resortName} • {booking.guests} guest{booking.guests !== 1 ? 's' : ''}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-sm font-bold text-ocean-blue">₱{booking.amount.toLocaleString()}</p>
+                        <p className="text-[11px] text-slate-400">{new Date(booking.createdAt).toLocaleDateString()}</p>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -3902,6 +4358,25 @@ function AdminDashboard({ profile }: { profile: UserProfile }) {
                       <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mb-1">Total Amount</p>
                       <p className="text-2xl font-black text-slate-900">₱{selectedBooking.amount.toLocaleString()}</p>
                     </div>
+                  </div>
+                  
+                  <div className="h-px bg-slate-200/50" />
+                  
+                  <div className="space-y-3">
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm text-slate-600">Base rate (₱{selectedBooking.basePricePerNight?.toLocaleString() || selectedBooking.pricePerNight?.toLocaleString()}/night)</span>
+                      <span className="text-sm font-bold text-slate-900">
+                        ₱{((selectedBooking.basePricePerNight || selectedBooking.pricePerNight || 0) * Math.ceil((new Date(selectedBooking.checkOut).getTime() - new Date(selectedBooking.checkIn).getTime()) / (1000 * 60 * 60 * 24))).toLocaleString()}
+                      </span>
+                    </div>
+                    {selectedBooking.extraGuests && selectedBooking.extraGuests > 0 && (
+                      <div className="flex justify-between items-center">
+                        <span className="text-sm text-slate-600">Extra guests ({selectedBooking.extraGuests} × ₱{selectedBooking.extraGuestRate?.toLocaleString() || '250'}/night)</span>
+                        <span className="text-sm font-bold text-slate-900">
+                          ₱{((selectedBooking.extraGuests || 0) * (selectedBooking.extraGuestRate || 250) * Math.ceil((new Date(selectedBooking.checkOut).getTime() - new Date(selectedBooking.checkIn).getTime()) / (1000 * 60 * 60 * 24))).toLocaleString()}
+                        </span>
+                      </div>
+                    )}
                   </div>
                   
                   <div className="h-px bg-slate-200/50" />

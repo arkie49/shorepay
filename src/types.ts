@@ -26,17 +26,25 @@ export interface Booking {
   id: string;
   userUid: string;
   userName: string;
+  fullName?: string;
+  email?: string;
+  phone?: string;
+  address?: string;
   resortId: string;
   resortName: string;
   roomId?: string;
   roomName?: string;
   pricePerNight?: number;
+  basePricePerNight?: number;
+  extraGuests?: number;
+  extraGuestRate?: number;
   checkIn: string;
   checkOut: string;
   guests: number;
   provider: string;
   amount: number;
   referenceNumber?: string;
+  customFields?: Record<string, string>;
   createdAt: string;
 }
 
@@ -50,6 +58,9 @@ export interface Customer {
   roomId?: string;
   roomName?: string;
   pricePerNight?: number;
+  basePricePerNight?: number;
+  extraGuests?: number;
+  extraGuestRate?: number;
   checkIn: string;
   checkOut: string;
   guests: number;
@@ -58,6 +69,7 @@ export interface Customer {
   referenceNumber?: string;
   createdAt: string;
   status: 'pending' | 'confirmed' | 'cancelled';
+  customFields?: Record<string, string>;
 }
 
 export interface ResortAdmin {
