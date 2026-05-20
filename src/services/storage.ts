@@ -1,4 +1,4 @@
-import { type UserProfile, type Transaction, type Merchant, type Resort, type Booking, type Customer, type ResortAdmin } from '../types';
+import { type UserProfile, type Transaction, type Merchant, type Resort, type Booking, type Customer, type ResortAdmin, type Notification } from '../types';
 import { firebaseDb } from './firebase';
 import { get, push, ref, set, update } from 'firebase/database';
 
@@ -27,6 +27,7 @@ const KEYS = {
   MERCHANTS: 'shorepay_merchants',
   RESORTS: 'shorepay_resorts',
   BOOKINGS: 'shorepay_bookings',
+  NOTIFICATIONS: 'shorepay_user_notifications',
 };
 
 // Initial Mock Data
@@ -187,6 +188,32 @@ export const storage = {
     return computed === passwordHash;
   },
 
+  getUserNotifications: (uid: string): Notification[] => {
+    return storage.get(`${KEYS.NOTIFICATIONS}_${uid}`, []);
+  },
+
+  saveUserNotifications: (uid: string, notifications: Notification[]) => {
+    storage.set(`${KEYS.NOTIFICATIONS}_${uid}`, notifications);
+  },
+
+  addUserNotification: (uid: string, message: string): Notification => {
+    const existing = storage.getUserNotifications(uid);
+    const notification: Notification = {
+      id: Math.random().toString(36).substring(2),
+      message,
+      createdAt: new Date().toISOString(),
+      read: false,
+    };
+    storage.saveUserNotifications(uid, [notification, ...existing]);
+    return notification;
+  },
+
+  markNotificationRead: (uid: string, notificationId: string) => {
+    const existing = storage.getUserNotifications(uid);
+    const updated = existing.map((note) => note.id === notificationId ? { ...note, read: true } : note);
+    storage.saveUserNotifications(uid, updated);
+  },
+
   // Transactions
   getTransactions: (uid: string): Transaction[] => {
     const all = storage.get(KEYS.TRANSACTIONS, []);
@@ -213,6 +240,13 @@ export const storage = {
   },
 
   addTransactionRemote: async (tx: Transaction) => {
+    await set(ref(firebaseDb, `transactionsByUser/${tx.fromUid}/${tx.id}`), tx);
+    if (tx.toUid && tx.toUid !== tx.fromUid && tx.toUid !== 'external') {
+      await set(ref(firebaseDb, `transactionsByUser/${tx.toUid}/${tx.id}`), tx);
+    }
+  },
+
+  updateTransactionRemote: async (tx: Transaction) => {
     await set(ref(firebaseDb, `transactionsByUser/${tx.fromUid}/${tx.id}`), tx);
     if (tx.toUid && tx.toUid !== tx.fromUid && tx.toUid !== 'external') {
       await set(ref(firebaseDb, `transactionsByUser/${tx.toUid}/${tx.id}`), tx);
@@ -416,6 +450,13 @@ export const storage = {
   },
 
   addBookingRemote: async (booking: Booking): Promise<void> => {
+    const updates: Record<string, any> = {};
+    updates[`bookings/${booking.id}`] = booking;
+    updates[`bookingsByResort/${booking.resortId}/${booking.id}`] = booking;
+    await update(ref(firebaseDb), updates);
+  },
+
+  updateBookingRemote: async (booking: Booking): Promise<void> => {
     const updates: Record<string, any> = {};
     updates[`bookings/${booking.id}`] = booking;
     updates[`bookingsByResort/${booking.resortId}/${booking.id}`] = booking;

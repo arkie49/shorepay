@@ -43,9 +43,13 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { QRCodeSVG } from 'qrcode.react';
-import { send } from '@emailjs/browser';
+import emailjs from '@emailjs/browser';
 import { storage } from './services/storage';
-import { type Booking, type Customer, type Merchant, type UserProfile, type Transaction, type Resort, type UserRole } from './types';
+import { type Booking, type Customer, type Merchant, type UserProfile, type Transaction, type Resort, type UserRole, type Notification } from './types';
+
+const EMAILJS_SERVICE_ID = import.meta.env.VITE_EMAILJS_SERVICE_ID;
+const EMAILJS_TEMPLATE_ID = import.meta.env.VITE_EMAILJS_TEMPLATE_ID;
+const EMAILJS_PUBLIC_KEY = import.meta.env.VITE_EMAILJS_PUBLIC_KEY;
 
 // --- Utility ---
 function cn(...inputs: ClassValue[]) {
@@ -155,29 +159,78 @@ function ResortDetailScreen({ resort, profile, onBack }: { resort: Resort; profi
   // ... existing code ...
 
   const sendConfirmationEmail = async (email: string, referenceNumber: string, resortName: string, amount: number) => {
+    const isValidEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+
     if (!email) {
-      alert('Cannot send confirmation email: customer email is missing.');
+      console.warn('Cannot send confirmation email: customer email is missing.');
+      return false;
+    }
+
+    if (!isValidEmail(email)) {
+      console.warn('Cannot send confirmation email: invalid email format.', email);
+      return false;
+    }
+
+    const customerFullName = customerForm.fullName || profile?.fullName || 'Guest';
+    const customerPhone = customerForm.phone || '';
+    const customerAddress = customerForm.address || '';
+    const guestCount = guests;
+    const paymentMethod = provider || 'Unknown';
+    const checkInDate = checkIn ? new Date(checkIn).toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' }) : 'N/A';
+    const checkOutDate = checkOut ? new Date(checkOut).toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' }) : 'N/A';
+    const amountFormatted = `₱${amount.toLocaleString()}`;
+
+    const templateParams = {
+      to_email: email,
+      email: email,
+      customer_name: customerFullName,
+      from_name: 'ShorePay',
+      resort_name: resortName,
+      room_name: selectedRoom?.name || 'Room',
+      reference_number: referenceNumber,
+      amount: amount,
+      amount_formatted: amountFormatted,
+      payment_method: paymentMethod,
+      guests: guestCount,
+      check_in: checkInDate,
+      check_out: checkOutDate,
+      customer_phone: customerPhone,
+      customer_address: customerAddress,
+      booking_date: new Date().toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' }),
+    };
+
+    console.log('📧 Sending email with parameters:', templateParams);
+    console.log('EmailJS Config:', {
+      serviceId: EMAILJS_SERVICE_ID,
+      templateId: EMAILJS_TEMPLATE_ID,
+      publicKey: EMAILJS_PUBLIC_KEY
+    });
+
+    if (!EMAILJS_SERVICE_ID || !EMAILJS_TEMPLATE_ID) {
+      console.warn('EmailJS is not configured. Skipping email send.');
       return false;
     }
 
     try {
-      await send(
-        'service_cj3thgh',
-        'template_6o4dazm',
-        {
-          to_email: email,
-          resort_name: resortName,
-          reference_number: referenceNumber,
-          amount: amount,
-          customer_name: profile.fullName,
-        },
-        'eeFfoOPAO_3QCjux1'
+      await emailjs.send(
+        EMAILJS_SERVICE_ID,
+        EMAILJS_TEMPLATE_ID,
+        templateParams,
+        EMAILJS_PUBLIC_KEY
       );
-      console.log('Confirmation email sent successfully');
+      console.log('✓ Confirmation email sent successfully to:', email);
       return true;
-    } catch (error) {
-      console.error('Failed to send confirmation email:', error);
-      alert('Booking completed, but email confirmation failed. Check the console or EmailJS settings.');
+    } catch (error: any) {
+      console.error('✗ Failed to send confirmation email');
+      console.error('HTTP Status:', error?.status);
+      console.error('Status Code:', error?.statusCode);
+      console.error('Response Text:', error?.statusText);
+      console.error('Error Details:', {
+        name: error?.name,
+        message: error?.message,
+        response: error?.response,
+      });
+      console.error('Full Error Object:', error);
       return false;
     }
   };
@@ -193,7 +246,41 @@ function ResortDetailScreen({ resort, profile, onBack }: { resort: Resort; profi
   const [customerForm, setCustomerForm] = useState<Record<string, string>>({});
   const [showPaymentDetails, setShowPaymentDetails] = useState(false);
   const [referenceNumber, setReferenceNumber] = useState('');
+  const [discountType, setDiscountType] = useState<'none' | 'elderly' | 'children' | 'pwd'>('none');
+  const [discountProof, setDiscountProof] = useState<File | null>(null);
+  const [discountProofPreviewUrl, setDiscountProofPreviewUrl] = useState<string | null>(null);
+  const [paymentProof, setPaymentProof] = useState<File | null>(null);
+  const [paymentProofPreviewUrl, setPaymentProofPreviewUrl] = useState<string | null>(null);
   const [imagePreviewIndex, setImagePreviewIndex] = useState<number | null>(null);
+  const [headerScroll, setHeaderScroll] = useState(0);
+
+  const headerHeight = Math.max(120, 320 - headerScroll);
+  const titleOpacity = Math.max(0, 1 - headerScroll / 120);
+  const imageScale = Math.max(0.92, 1 - headerScroll / 1200);
+
+  const handleScroll = (event: React.UIEvent<HTMLDivElement>) => {
+    setHeaderScroll(event.currentTarget.scrollTop);
+  };
+
+  useEffect(() => {
+    if (!discountProof) {
+      setDiscountProofPreviewUrl(null);
+      return undefined;
+    }
+    const url = URL.createObjectURL(discountProof);
+    setDiscountProofPreviewUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [discountProof]);
+
+  useEffect(() => {
+    if (!paymentProof) {
+      setPaymentProofPreviewUrl(null);
+      return undefined;
+    }
+    const url = URL.createObjectURL(paymentProof);
+    setPaymentProofPreviewUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [paymentProof]);
 
   useEffect(() => {
     if (!bookingReceipt) return undefined;
@@ -225,6 +312,15 @@ function ResortDetailScreen({ resort, profile, onBack }: { resort: Resort; profi
   const extraGuestRate = 250;
   const extraGuests = Math.max(0, guests - maxIncludedGuests);
   const extraGuestChargePerNight = extraGuests * extraGuestRate;
+  const discountRates: Record<'elderly' | 'children' | 'pwd', number> = {
+    elderly: 0.15,
+    children: 0.1,
+    pwd: 0.2,
+  };
+  const nights = checkIn && checkOut ? Math.ceil((new Date(checkOut).getTime() - new Date(checkIn).getTime()) / (1000 * 60 * 60 * 24)) : 0;
+  const subtotal = nights * (selectedRoom.pricePerNight + extraGuestChargePerNight);
+  const discountAmount = discountType !== 'none' ? Math.round(subtotal * (discountRates[discountType] ?? 0)) : 0;
+  const totalAmount = subtotal - discountAmount;
   const gallery = RESORT_GALLERIES[resort.id] ?? [resort.imageUrl];
   const mapQuery = `${resort.name}, ${resort.location}, Roxas`;
   const mapSrc = `https://www.google.com/maps?q=${encodeURIComponent(mapQuery)}&output=embed`;
@@ -241,11 +337,12 @@ function ResortDetailScreen({ resort, profile, onBack }: { resort: Resort; profi
 
   return (
     <div className="h-full flex flex-col bg-slate-50 relative">
-      <div className="relative h-[320px]">
+      <div className="relative overflow-hidden" style={{ height: `${headerHeight}px`, transition: 'height 0.16s ease-out' }}>
         <img
           src={resort.imageUrl}
           alt={resort.name}
           className="w-full h-full object-cover"
+          style={{ transform: `scale(${imageScale})`, transition: 'transform 0.16s ease-out' }}
           referrerPolicy="no-referrer"
         />
         <div className="absolute inset-0 bg-gradient-to-b from-black/40 via-black/10 to-slate-50" />
@@ -276,14 +373,14 @@ function ResortDetailScreen({ resort, profile, onBack }: { resort: Resort; profi
           </div>
         </div>
 
-        <div className="absolute bottom-6 left-6 right-6">
+        <div className="absolute bottom-6 left-6 right-6" style={{ opacity: titleOpacity, transition: 'opacity 0.16s ease-out' }}>
           <div className="inline-flex items-center gap-2 bg-white/90 backdrop-blur-sm px-3 py-1.5 rounded-full text-xs font-bold text-slate-700 shadow-sm">
             <Star size={14} className="text-orange-500 fill-orange-500" />
             <span>{resort.rating}</span>
             <span className="text-slate-400">•</span>
             <span className="text-slate-500">128 reviews</span>
           </div>
-          <h1 className="text-3xl font-extrabold tracking-tight text-white mt-3 drop-shadow-sm">{resort.name}</h1>
+          <h1 className="text-3xl font-extrabold tracking-tight text-white mt-3 drop-shadow-sm" style={{ transform: `scale(${Math.max(0.86, 1 - headerScroll / 320)})`, transition: 'transform 0.16s ease-out' }}>{resort.name}</h1>
           <div className="flex items-center gap-2 text-white/90 mt-2">
             <MapPin size={16} />
             <span className="text-sm font-medium">{resort.location}, Roxas</span>
@@ -291,7 +388,7 @@ function ResortDetailScreen({ resort, profile, onBack }: { resort: Resort; profi
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-6 pb-[calc(8.5rem+env(safe-area-inset-bottom))] space-y-6">
+      <div className="flex-1 overflow-y-auto p-6 pb-[calc(8.5rem+env(safe-area-inset-bottom))] space-y-6" onScroll={handleScroll}>
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <h2 className="text-xl font-extrabold text-slate-900">Choose a room</h2>
@@ -683,6 +780,89 @@ function ResortDetailScreen({ resort, profile, onBack }: { resort: Resort; profi
                     </div>
                   </div>
                 )}
+
+                <div className="bg-slate-50 rounded-3xl p-4 border border-slate-100">
+                  <div className="flex items-center gap-2 text-slate-700 font-bold mb-3">
+                    <Shield size={18} className="text-ocean-blue" />
+                    Payment Proof
+                  </div>
+                  <div className="space-y-3">
+                    <p className="text-xs text-slate-500">Upload a screenshot or photo of your payment as proof. This helps verify your transaction.</p>
+                    <label className="block text-sm font-bold text-slate-700 mb-1">Payment Screenshot/Photo</label>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0] ?? null;
+                        setPaymentProof(file);
+                      }}
+                      className="w-full text-sm text-slate-700"
+                    />
+                    {paymentProofPreviewUrl && (
+                      <div className="rounded-2xl overflow-hidden border border-slate-200">
+                        <img src={paymentProofPreviewUrl} alt="Payment proof preview" className="w-full h-40 object-cover" />
+                      </div>
+                    )}
+                    {paymentProof && (
+                      <p className="text-xs text-slate-500">Selected file: {paymentProof.name}</p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="bg-slate-50 rounded-3xl p-4 border border-slate-100">
+                  <div className="flex items-center gap-2 text-slate-700 font-bold mb-3">
+                    <Shield size={18} className="text-ocean-blue" />
+                    Discount Eligibility
+                  </div>
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-2 gap-2">
+                      {[
+                        { value: 'none', label: 'No discount' },
+                        { value: 'elderly', label: 'Elderly' },
+                        { value: 'children', label: 'Children' },
+                        { value: 'pwd', label: 'PWD' },
+                      ].map((option) => (
+                        <button
+                          key={option.value}
+                          type="button"
+                          onClick={() => setDiscountType(option.value as 'none' | 'elderly' | 'children' | 'pwd')}
+                          className={cn(
+                            'py-3 rounded-2xl text-sm border transition-colors',
+                            discountType === option.value
+                              ? 'bg-ocean-blue text-white border-ocean-blue'
+                              : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                          )}
+                        >
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    {discountType !== 'none' && (
+                      <div className="space-y-3">
+                        <p className="text-xs text-slate-500">Attach proof to claim your selected discount.</p>
+                        <label className="block text-sm font-bold text-slate-700 mb-1">Proof Photo</label>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0] ?? null;
+                            setDiscountProof(file);
+                          }}
+                          className="w-full text-sm text-slate-700"
+                        />
+                        {discountProofPreviewUrl && (
+                          <div className="rounded-2xl overflow-hidden border border-slate-200">
+                            <img src={discountProofPreviewUrl} alt="Proof preview" className="w-full h-40 object-cover" />
+                          </div>
+                        )}
+                        {discountProof && (
+                          <p className="text-xs text-slate-500">Selected file: {discountProof.name}</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
 
               <button
@@ -693,6 +873,10 @@ function ResortDetailScreen({ resort, profile, onBack }: { resort: Resort; profi
                   }
                   if (showPaymentDetails && !referenceNumber.trim()) {
                     alert('Please enter the reference number.');
+                    return;
+                  }
+                  if (discountType !== 'none' && !discountProof) {
+                    alert('Please attach proof to claim the discount.');
                     return;
                   }
                   if (!checkIn || !checkOut) {
@@ -816,6 +1000,24 @@ function ResortDetailScreen({ resort, profile, onBack }: { resort: Resort; profi
                   <p className="font-extrabold text-slate-900">{guests} Person{guests !== 1 ? 's' : ''}</p>
                 </div>
 
+                {discountType !== 'none' && (
+                  <div className="bg-slate-50 rounded-2xl p-4 border border-slate-100">
+                    <p className="text-xs text-slate-500 uppercase font-bold tracking-widest mb-1">Discount</p>
+                    <p className="font-extrabold text-slate-900 capitalize">{discountType}</p>
+                    <p className="text-xs text-slate-500 mt-1">Proof attached: {discountProof?.name ?? 'Not attached'}</p>
+                  </div>
+                )}
+
+                {paymentProofPreviewUrl && (
+                  <div className="bg-slate-50 rounded-2xl p-4 border border-slate-100">
+                    <p className="text-xs text-slate-500 uppercase font-bold tracking-widest mb-2">Payment Proof</p>
+                    <div className="rounded-2xl overflow-hidden border border-slate-200">
+                      <img src={paymentProofPreviewUrl} alt="Payment proof preview" className="w-full h-40 object-cover" />
+                    </div>
+                    <p className="text-xs text-slate-500 mt-2">File: {paymentProof?.name}</p>
+                  </div>
+                )}
+
                 {/* Customer Info */}
                 <div className="bg-slate-50 rounded-3xl p-4 border border-slate-100">
                   <p className="text-xs text-slate-500 uppercase font-bold tracking-widest mb-3">Guest Information</p>
@@ -856,25 +1058,28 @@ function ResortDetailScreen({ resort, profile, onBack }: { resort: Resort; profi
                     <div className="flex justify-between">
                       <span className="text-slate-600">Base rate</span>
                       <span className="font-bold text-slate-900">
-                        ₱{selectedRoom.pricePerNight.toLocaleString()} × {Math.ceil((new Date(checkOut).getTime() - new Date(checkIn).getTime()) / (1000 * 60 * 60 * 24))} nights
+                        ₱{selectedRoom.pricePerNight.toLocaleString()} × {nights} night{nights !== 1 ? 's' : ''}
                       </span>
                     </div>
                     {extraGuests > 0 && (
                       <div className="flex justify-between">
                         <span className="text-slate-600">Extra guests ({extraGuests})</span>
                         <span className="font-bold text-slate-900">
-                          ₱{(extraGuestRate * extraGuests).toLocaleString()} × {Math.ceil((new Date(checkOut).getTime() - new Date(checkIn).getTime()) / (1000 * 60 * 60 * 24))} nights
+                          ₱{(extraGuestRate * extraGuests).toLocaleString()} × {nights} night{nights !== 1 ? 's' : ''}
                         </span>
+                      </div>
+                    )}
+                    {discountType !== 'none' && discountAmount > 0 && (
+                      <div className="flex justify-between text-rose-600">
+                        <span className="text-slate-600">{discountType.charAt(0).toUpperCase() + discountType.slice(1)} discount</span>
+                        <span className="font-bold">-₱{discountAmount.toLocaleString()}</span>
                       </div>
                     )}
                   </div>
                   <div className="border-t border-ocean-blue/20 pt-3 flex justify-between items-end">
                     <p className="text-xs text-ocean-blue uppercase font-bold tracking-widest">Total Amount</p>
                     <p className="text-2xl font-black text-ocean-blue">
-                      ₱{(
-                        (selectedRoom.pricePerNight + extraGuestChargePerNight) *
-                        Math.ceil((new Date(checkOut).getTime() - new Date(checkIn).getTime()) / (1000 * 60 * 60 * 24))
-                      ).toLocaleString()}
+                      ₱{totalAmount.toLocaleString()}
                     </p>
                   </div>
                 </div>
@@ -892,7 +1097,18 @@ function ResortDetailScreen({ resort, profile, onBack }: { resort: Resort; profi
                     const checkInDate = new Date(checkIn);
                     const checkOutDate = new Date(checkOut);
                     const nights = Math.ceil((checkOutDate.getTime() - checkInDate.getTime()) / (1000 * 60 * 60 * 24));
-                    const amount = nights * (selectedRoom.pricePerNight + extraGuestChargePerNight);
+                    const amount = totalAmount;
+
+                    // Convert payment proof to data URL
+                    let paymentProofUrl: string | undefined;
+                    if (paymentProof) {
+                      paymentProofUrl = await new Promise((resolve, reject) => {
+                        const reader = new FileReader();
+                        reader.onload = () => resolve(reader.result as string);
+                        reader.onerror = reject;
+                        reader.readAsDataURL(paymentProof);
+                      });
+                    }
 
                     // Create customer record
                     const customer: Customer = {
@@ -914,8 +1130,14 @@ function ResortDetailScreen({ resort, profile, onBack }: { resort: Resort; profi
                       paymentMethod: provider!,
                       amount,
                       referenceNumber: referenceNumber || undefined,
+                      paymentProofUrl,
                       createdAt: new Date().toISOString(),
-                      status: 'confirmed'
+                      status: 'confirmed',
+                      customFields: discountType !== 'none' ? {
+                        discountType,
+                        discountAmount: discountAmount.toString(),
+                        discountProofName: discountProof?.name ?? 'Not attached',
+                      } : undefined,
                     };
 
                     try {
@@ -939,7 +1161,13 @@ function ResortDetailScreen({ resort, profile, onBack }: { resort: Resort; profi
                         provider: provider!,
                         amount,
                         referenceNumber: referenceNumber || undefined,
+                        paymentProofUrl,
                         createdAt: new Date().toISOString(),
+                        customFields: discountType !== 'none' ? {
+                          discountType,
+                          discountAmount: discountAmount.toString(),
+                          discountProofName: discountProof?.name ?? 'Not attached',
+                        } : undefined,
                       });
                       await storage.addBookingRemote(booking);
 
@@ -950,20 +1178,27 @@ function ResortDetailScreen({ resort, profile, onBack }: { resort: Resort; profi
                       setProvider(null);
                       setShowPaymentDetails(false);
                       setReferenceNumber('');
+                      setDiscountType('none');
+                      setDiscountProof(null);
+                      setPaymentProof(null);
                       setCheckIn('');
                       setCheckOut('');
                       setGuests(2);
 
                       // Send confirmation email
-                      const emailSent = await sendConfirmationEmail(customerForm.email || profile.email, referenceNumber, resort.name, amount);
+                      const customerEmail = customerForm.email || profile?.email;
+                      const emailSent = await sendConfirmationEmail(customerEmail, referenceNumber, resort.name, amount);
+                      
                       if (emailSent) {
-                        alert(`Booking confirmed! Reference number ${referenceNumber} sent to ${customerForm.email || profile.email}`);
+                        console.log(`✓ Booking confirmed with email sent to ${customerEmail}`);
+                        alert(`✓ Booking confirmed!\n\nReference: ${referenceNumber}\nConfirmation sent to: ${customerEmail}`);
                       } else {
-                        alert(`Booking confirmed! Reference number ${referenceNumber} saved, but email confirmation could not be sent.`);
+                        console.warn(`⚠ Booking saved but email failed. Reference: ${referenceNumber}`);
+                        alert(`✓ Booking confirmed!\n\nReference: ${referenceNumber}\n\n⚠ Email notification failed. Your booking is still confirmed.`);
                       }
                     } catch (error) {
                       console.error('Error saving booking:', error);
-                      alert('Failed to complete booking. Please try again.');
+                      alert('❌ Failed to complete booking. Please try again.');
                     }
                   }}
                   className="bg-ocean-blue text-white py-3 rounded-2xl font-extrabold hover:bg-ocean-blue/90 transition-all"
@@ -1046,6 +1281,9 @@ function TransactionHistoryScreen({ profile, onBack }: { profile: UserProfile; o
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
+  const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
+  const [showTransactionDetails, setShowTransactionDetails] = useState(false);
+  const [notificationMessage, setNotificationMessage] = useState<string | null>(null);
 
   const updateCustomerStatus = useCallback(async (customerId: string, status: Customer['status']) => {
     try {
@@ -1059,12 +1297,59 @@ function TransactionHistoryScreen({ profile, onBack }: { profile: UserProfile; o
     }
   }, []);
 
+  const requestTransactionCancellation = useCallback((transaction: Transaction) => {
+    const updatedTx = {
+      ...transaction,
+      status: 'cancel-requested' as Transaction['status'],
+      customFields: {
+        ...transaction.customFields,
+        cancellationRequestedAt: new Date().toISOString(),
+      },
+    };
+    setTransactions((prev) => prev.map((tx) => (tx.id === transaction.id ? updatedTx : tx)));
+    setSelectedTransaction(updatedTx);
+    setNotificationMessage('Cancellation request sent to admin. You will be notified once it is approved.');
+    void storage.updateTransactionRemote(updatedTx).catch(() => {
+      console.warn('Failed to sync cancellation request to remote storage.');
+    });
+  }, []);
+
+  const approveTransactionCancellation = useCallback((transaction: Transaction) => {
+    const updatedTx = {
+      ...transaction,
+      status: 'cancelled' as Transaction['status'],
+      customFields: {
+        ...transaction.customFields,
+        cancellationApprovedAt: new Date().toISOString(),
+      },
+    };
+    setTransactions((prev) => prev.map((tx) => (tx.id === transaction.id ? updatedTx : tx)));
+    setSelectedTransaction(updatedTx);
+    setNotificationMessage('Cancellation approved. The user has been notified.');
+    void storage.updateTransactionRemote(updatedTx).catch(() => {
+      console.warn('Failed to sync cancellation approval to remote storage.');
+    });
+  }, []);
+
   const deleteTransaction = useCallback((transactionId: string) => {
     setTransactions(prev => prev.filter(tx => tx.id !== transactionId));
   }, []);
 
   const deleteBooking = useCallback((bookingId: string) => {
     setBookings(prev => prev.filter(booking => booking.id !== bookingId));
+  }, []);
+
+  const requestBookingCancellation = useCallback((booking: Booking) => {
+    const updated = {
+      ...booking,
+      customFields: {
+        ...booking.customFields,
+        cancellationRequestedAt: new Date().toISOString(),
+      },
+    };
+    setBookings(prev => prev.map(b => b.id === booking.id ? updated : b));
+    setNotificationMessage('Cancellation request sent for booking. Admin will review it.');
+    void storage.updateBookingRemote(updated).catch(() => console.warn('Failed to sync booking cancellation'));
   }, []);
 
   useEffect(() => {
@@ -1085,6 +1370,18 @@ function TransactionHistoryScreen({ profile, onBack }: { profile: UserProfile; o
         </button>
         <h1 className="text-xl font-bold">Transaction History</h1>
       </div>
+
+      {notificationMessage && (
+        <div className="mx-4 mt-4 rounded-3xl bg-blue-50 border border-blue-200 p-4 text-slate-700 flex items-start justify-between gap-4 shadow-sm">
+          <div className="text-sm">{notificationMessage}</div>
+          <button
+            onClick={() => setNotificationMessage(null)}
+            className="text-xs font-bold uppercase tracking-[0.2em] text-blue-700 hover:text-blue-900"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
         <div className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm">
@@ -1121,11 +1418,14 @@ function TransactionHistoryScreen({ profile, onBack }: { profile: UserProfile; o
                       {(tx.type === 'cash-in' ? '+' : tx.type === 'withdraw' ? '-' : tx.fromUid === profile.uid ? '-' : '+')}₱{tx.amount.toLocaleString()}
                     </p>
                     <button
-                      onClick={() => deleteTransaction(tx.id)}
-                      className="w-8 h-8 bg-red-100 text-red-600 rounded-full flex items-center justify-center hover:bg-red-200 transition-colors"
-                      title="Delete transaction"
+                      onClick={() => {
+                        setSelectedTransaction(tx);
+                        setShowTransactionDetails(true);
+                      }}
+                      className="px-3 py-2 bg-ocean-blue text-white rounded-2xl text-xs font-bold hover:bg-ocean-blue/90 transition-colors"
+                      title="View transaction details"
                     >
-                      <X size={16} />
+                      Details
                     </button>
                   </div>
                 </div>
@@ -1154,9 +1454,21 @@ function TransactionHistoryScreen({ profile, onBack }: { profile: UserProfile; o
                       <p className="text-xs text-slate-500">{booking.checkIn} → {booking.checkOut} • {booking.guests} guest{booking.guests !== 1 ? 's' : ''}</p>
                     </div>
                     <div className="flex items-center gap-2">
-                      <p className="text-right text-sm text-slate-500">
-                        {booking.provider}
-                      </p>
+                      <div className="text-right">
+                        <p className="text-sm text-slate-500">{booking.provider}</p>
+                        {booking.customFields?.cancellationRequestedAt ? (
+                          <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-orange-600">Cancellation Requested</p>
+                        ) : null}
+                      </div>
+                      {!booking.customFields?.cancellationRequestedAt && (
+                        <button
+                          onClick={() => requestBookingCancellation(booking)}
+                          className="px-3 py-2 bg-rose-600 text-white rounded-2xl text-xs font-bold hover:bg-rose-700 transition-colors"
+                          title="Request cancellation"
+                        >
+                          Request Cancellation
+                        </button>
+                      )}
                       <button
                         onClick={() => deleteBooking(booking.id)}
                         className="w-8 h-8 bg-red-100 text-red-600 rounded-full flex items-center justify-center hover:bg-red-200 transition-colors"
@@ -1373,8 +1685,16 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<string>('home');
   const [selectedResort, setSelectedResort] = useState<Resort | null>(null);
 
+  const EMAILJS_SERVICE_ID = (import.meta as any).env?.VITE_emailjs_service_id ?? 'service_olirjm9';
+  const EMAILJS_TEMPLATE_ID = (import.meta as any).env?.VITE_emailjs_template_id ?? 'template_fkwnml1';
+  const EMAILJS_PUBLIC_KEY = (import.meta as any).env?.VITE_emailjs_public_key ?? 'y3AEOHY7CdzpY2crk';
+
   // Auth Listener Simulation
   useEffect(() => {
+    // Initialize EmailJS
+    emailjs.init(EMAILJS_PUBLIC_KEY);
+    console.log('✓ EmailJS initialized');
+
     // Initialize resort admins
     void storage.initializeResortAdmins().catch(() => {});
 
@@ -1962,10 +2282,13 @@ function NavButton({ active, icon, label, onClick }: { active: boolean; icon: Re
 function CustomerHome({ profile, onNavigate }: { profile: UserProfile; onNavigate: (tab: string) => void }) {
   const [resorts, setResorts] = useState<Resort[]>([]);
   const [activeModal, setActiveModal] = useState<'cash-in' | 'cash-out' | null>(null);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [showNotifications, setShowNotifications] = useState(false);
   
   useEffect(() => {
     // Mock resorts for demo
     setResorts(MOCK_RESORTS);
+    setNotifications(storage.getUserNotifications(profile.uid));
   }, []);
 
   return (
@@ -1979,12 +2302,68 @@ function CustomerHome({ profile, onNavigate }: { profile: UserProfile; onNavigat
             </div>
             <span className="font-bold tracking-tighter">SHOREPAY</span>
           </div>
-          <button 
-            onClick={() => alert('No new notifications')}
-            className="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center hover:bg-white/30 transition-colors"
-          >
-            <Bell size={20} />
-          </button>
+          <div className="relative">
+            <button
+              onClick={() => {
+                setShowNotifications((s) => !s);
+                // refresh notifications when opening
+                if (!showNotifications) setNotifications(storage.getUserNotifications(profile.uid));
+              }}
+              className="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center hover:bg-white/30 transition-colors"
+            >
+              <Bell size={20} />
+            </button>
+            {notifications.length > 0 && (
+              <div className="absolute -top-1 -right-1 bg-rose-600 text-white text-[11px] font-bold rounded-full w-5 h-5 flex items-center justify-center">{notifications.filter(n=>!n.read).length || notifications.length}</div>
+            )}
+
+            <AnimatePresence>
+              {showNotifications && (
+                <motion.div
+                  initial={{ opacity: 0, y: -8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -8 }}
+                  className="absolute right-0 mt-3 w-80 bg-white rounded-2xl shadow-lg border border-slate-100 z-20"
+                >
+                  <div className="p-4 max-h-64 overflow-y-auto space-y-3">
+                    {notifications.length === 0 && (
+                      <div className="text-sm text-slate-500">No notifications</div>
+                    )}
+                    {notifications.map((note) => (
+                      <div key={note.id} className="flex items-start justify-between gap-4 rounded-2xl bg-slate-50 p-3">
+                        <div>
+                          <p className="text-sm font-bold">Notification</p>
+                          <p className="text-sm mt-1 text-slate-700">{note.message}</p>
+                          <p className="text-[11px] text-slate-500 mt-2">{new Date(note.createdAt).toLocaleString()}</p>
+                        </div>
+                        <div className="flex flex-col items-end gap-2">
+                          <button
+                            onClick={() => {
+                              storage.markNotificationRead(profile.uid, note.id);
+                              setNotifications(storage.getUserNotifications(profile.uid));
+                            }}
+                            className="text-xs font-bold uppercase tracking-[0.2em] text-slate-600 hover:text-slate-800"
+                          >
+                            Mark
+                          </button>
+                          <button
+                            onClick={() => {
+                              const updated = notifications.filter((n) => n.id !== note.id);
+                              storage.saveUserNotifications(profile.uid, updated);
+                              setNotifications(updated);
+                            }}
+                            className="text-xs font-bold uppercase tracking-[0.2em] text-rose-600 hover:text-rose-800"
+                          >
+                            Dismiss
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
         </div>
 
         <div className="mb-6">
@@ -2193,6 +2572,7 @@ function WalletScreen({ profile, onNavigate }: { profile: UserProfile; onNavigat
   const [transferNote, setTransferNote] = useState('');
   const [transferError, setTransferError] = useState<string | null>(null);
   const [transferLoading, setTransferLoading] = useState(false);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const [cameraError, setCameraError] = useState<string | null>(null);
@@ -2211,6 +2591,7 @@ function WalletScreen({ profile, onNavigate }: { profile: UserProfile; onNavigat
       storage.saveUser(remote);
       storage.setCurrentUser(remote);
     });
+    setNotifications(storage.getUserNotifications(profile.uid));
   }, [profile.uid]);
 
   const stopCamera = () => {
@@ -2474,6 +2855,12 @@ function WalletScreen({ profile, onNavigate }: { profile: UserProfile; onNavigat
     });
   };
 
+  const dismissNotification = (notificationId: string) => {
+    const updated = notifications.filter((note) => note.id !== notificationId);
+    storage.saveUserNotifications(profile.uid, updated);
+    setNotifications(updated);
+  };
+
   return (
     <div className="p-6 space-y-6">
       <div className="flex justify-between items-center">
@@ -2482,6 +2869,26 @@ function WalletScreen({ profile, onNavigate }: { profile: UserProfile; onNavigat
           <QrCode size={20} />
         </button>
       </div>
+
+      {notifications.length > 0 && (
+        <div className="space-y-3">
+          {notifications.map((note) => (
+            <div key={note.id} className="flex items-start justify-between gap-4 rounded-3xl bg-blue-50 border border-blue-200 p-4 text-slate-700 shadow-sm">
+              <div>
+                <p className="text-sm font-bold">Notification</p>
+                <p className="text-sm mt-1">{note.message}</p>
+                <p className="text-[11px] text-slate-500 mt-2">{new Date(note.createdAt).toLocaleString()}</p>
+              </div>
+              <button
+                onClick={() => dismissNotification(note.id)}
+                className="text-xs font-bold uppercase tracking-[0.2em] text-blue-700 hover:text-blue-900"
+              >
+                Dismiss
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Balance Card */}
       <div className="coastal-gradient p-8 rounded-[32px] text-white shadow-xl shadow-ocean-blue/20 relative overflow-hidden">
@@ -2942,20 +3349,19 @@ function ResortAdminDashboard({ profile }: { profile: UserProfile }) {
   const currentAdmin = storage.getCurrentResortAdmin();
   const resortId = currentAdmin?.resortId || '';
   const resort = MOCK_RESORTS.find(r => r.id === resortId);
-  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [bookings, setBookings] = useState<Booking[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
-  const [customerQuery, setCustomerQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'all' | Customer['status']>('all');
-  const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
+  const [bookingQuery, setBookingQuery] = useState('');
+  const [selectedBooking, setSelectedBooking] = useState<Booking | null>(null);
 
   const loadData = useCallback(async (opts?: { silent?: boolean }) => {
     const silent = opts?.silent === true;
     if (!silent) setRefreshing(true);
     try {
-      const remoteCustomers = await storage.getCustomersByResortRemote(resortId);
-      setCustomers(remoteCustomers);
+      const remoteBookings = await storage.getBookingsByResortRemote(resortId);
+      setBookings(remoteBookings);
       setLastSyncedAt(new Date().toISOString());
     } catch (error) {
       console.error('Error loading resort admin data:', error);
@@ -2971,39 +3377,47 @@ function ResortAdminDashboard({ profile }: { profile: UserProfile }) {
     }
   }, [loadData, resortId]);
 
-  const totalRevenue = customers
-    .filter(c => c.status === 'confirmed')
-    .reduce((sum, c) => sum + c.amount, 0);
+  const totalRevenue = bookings.reduce((sum, b) => sum + b.amount, 0);
 
-  const totalCustomers = customers.length;
-  const confirmedBookings = customers.filter(c => c.status === 'confirmed').length;
-  const pendingBookings = customers.filter(c => c.status === 'pending').length;
+  const totalBookings = bookings.length;
 
-  const filteredCustomers = useMemo(() => {
-    const q = customerQuery.trim().toLowerCase();
-    return customers
-      .filter((c) => (statusFilter === 'all' ? true : c.status === statusFilter))
-      .filter((c) => {
+  const filteredBookings = useMemo(() => {
+    const q = bookingQuery.trim().toLowerCase();
+    return bookings
+      .filter((b) => {
         if (!q) return true;
         return (
-          c.id.toLowerCase().includes(q) ||
-          c.fullName.toLowerCase().includes(q) ||
-          c.email.toLowerCase().includes(q) ||
-          c.phone.toLowerCase().includes(q)
+          b.id.toLowerCase().includes(q) ||
+          b.userName.toLowerCase().includes(q) ||
+          b.resortName.toLowerCase().includes(q) ||
+          (b.referenceNumber ?? '').toLowerCase().includes(q)
         );
       })
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-  }, [customers, customerQuery, statusFilter]);
+  }, [bookings, bookingQuery]);
 
-  const updateCustomerStatus = useCallback(async (customerId: string, status: Customer['status']) => {
+  const approveBookingCancellation = useCallback(async (booking: Booking) => {
+    const updated: Booking = {
+      ...booking,
+      customFields: {
+        ...booking.customFields,
+        cancellationApprovedAt: new Date().toISOString(),
+      },
+    };
+    setBookings((prev) => prev.map((b) => (b.id === updated.id ? updated : b)));
+    setSelectedBooking((prev) => (prev?.id === updated.id ? updated : prev));
     try {
-      await storage.updateCustomerStatusRemote(resortId, customerId, status);
-      setCustomers(prev => prev.map(c => c.id === customerId ? { ...c, status } : c));
+      await storage.updateBookingRemote(updated);
+      storage.addUserNotification(
+        updated.userUid,
+        `Your cancellation request for booking at ${updated.resortName} has been approved by the resort admin.`
+      );
+      alert('Cancellation approved and the user has been notified.');
     } catch (error) {
-      console.error('Error updating customer status:', error);
-      alert('Failed to update status. Please try again.');
+      console.error('Failed to approve cancellation:', error);
+      alert('Cancellation approved locally, but failed to sync or notify user.');
     }
-  }, [resortId]);
+  }, []);
 
   const downloadCsv = useCallback((filename: string, rows: Array<Record<string, any>>) => {
     const escape = (v: any) => `"${String(v ?? '').replace(/"/g, '""')}"`;
@@ -3022,25 +3436,26 @@ function ResortAdminDashboard({ profile }: { profile: UserProfile }) {
     URL.revokeObjectURL(url);
   }, []);
 
-  const exportCustomers = useCallback(() => {
+  const exportBookings = useCallback(() => {
     downloadCsv(
-      `${resort?.name.replace(/\s+/g, '_')}_customers_${new Date().toISOString().slice(0, 10)}.csv`,
-      filteredCustomers.map((c) => ({
-        id: c.id,
-        fullName: c.fullName,
-        email: c.email,
-        phone: c.phone,
-        address: c.address,
-        checkIn: c.checkIn,
-        checkOut: c.checkOut,
-        guests: c.guests,
-        paymentMethod: c.paymentMethod,
-        amount: c.amount,
-        status: c.status,
-        createdAt: c.createdAt,
+      `${resort?.name.replace(/\s+/g, '_')}_bookings_${new Date().toISOString().slice(0, 10)}.csv`,
+      filteredBookings.map((b) => ({
+        id: b.id,
+        userName: b.userName,
+        userUid: b.userUid,
+        resortId: b.resortId,
+        resortName: b.resortName,
+        roomName: b.roomName,
+        checkIn: b.checkIn,
+        checkOut: b.checkOut,
+        guests: b.guests,
+        provider: b.provider,
+        amount: b.amount,
+        referenceNumber: b.referenceNumber,
+        createdAt: b.createdAt,
       }))
     );
-  }, [downloadCsv, filteredCustomers, resort]);
+  }, [downloadCsv, filteredBookings, resort]);
 
   if (!resort) {
     return (
@@ -3068,13 +3483,13 @@ function ResortAdminDashboard({ profile }: { profile: UserProfile }) {
   return (
     <div className="h-full flex flex-col bg-slate-50">
       <div className="flex-1 overflow-y-auto p-6 space-y-6">
-        {/* Customers List */}
+        {/* Bookings List */}
         <div className="bg-white rounded-[32px] border border-slate-100 shadow-sm overflow-hidden">
           <div className="p-6 border-b border-slate-100">
             <div className="flex items-center justify-between mb-4">
               <div>
-                <h3 className="text-lg font-extrabold">Customer Bookings</h3>
-                <p className="text-sm text-slate-500">Manage customer registrations and bookings</p>
+                <h3 className="text-lg font-extrabold">Resort Bookings</h3>
+                <p className="text-sm text-slate-500">Manage bookings for this resort only.</p>
               </div>
               <div className="flex items-center gap-3">
                 <button
@@ -3085,7 +3500,7 @@ function ResortAdminDashboard({ profile }: { profile: UserProfile }) {
                   <RefreshCcw size={16} className={refreshing ? 'animate-spin' : ''} />
                 </button>
                 <button
-                  onClick={exportCustomers}
+                  onClick={exportBookings}
                   className="px-4 py-2 bg-ocean-blue text-white rounded-xl font-bold hover:bg-ocean-blue/90 transition-colors flex items-center gap-2"
                 >
                   <Download size={16} />
@@ -3099,90 +3514,66 @@ function ResortAdminDashboard({ profile }: { profile: UserProfile }) {
               <div className="flex-1">
                 <input
                   type="text"
-                  placeholder="Search customers..."
-                  value={customerQuery}
-                  onChange={e => setCustomerQuery(e.target.value)}
+                  placeholder="Search bookings..."
+                  value={bookingQuery}
+                  onChange={e => setBookingQuery(e.target.value)}
                   className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-ocean-blue"
                 />
               </div>
-              <select
-                value={statusFilter}
-                onChange={e => setStatusFilter(e.target.value as any)}
-                className="px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-ocean-blue"
-              >
-                <option value="all">All Status</option>
-                <option value="pending">Pending</option>
-                <option value="confirmed">Confirmed</option>
-                <option value="cancelled">Cancelled</option>
-              </select>
             </div>
           </div>
 
           <div className="divide-y divide-slate-100 max-h-96 overflow-y-auto">
-            {filteredCustomers.length === 0 ? (
+            {filteredBookings.length === 0 ? (
               <div className="p-8 text-center text-slate-500">
-                No customers found
+                No bookings found for this resort.
               </div>
             ) : (
-              filteredCustomers.map((customer) => (
+              filteredBookings.map((booking) => (
                 <div 
-                  key={customer.id} 
-                  onClick={() => setSelectedCustomer(customer)}
+                  key={booking.id} 
                   className="p-6 hover:bg-slate-50 transition-colors cursor-pointer group"
                 >
-                  <div className="flex items-start justify-between">
+                  <div className="flex items-start justify-between gap-4">
                     <div className="flex-1">
-                      <div className="flex items-center gap-3 mb-2">
-                        <h4 className="font-extrabold text-slate-900 group-hover:text-ocean-blue transition-colors">{customer.fullName}</h4>
-                        <span className={cn(
-                          "px-2 py-1 text-xs font-bold uppercase tracking-widest rounded-full",
-                          customer.status === 'confirmed' ? "bg-green-100 text-green-700" :
-                          customer.status === 'pending' ? "bg-yellow-100 text-yellow-700" :
-                          "bg-red-100 text-red-700"
-                        )}>
-                          {customer.status}
+                      <div className="flex items-center gap-3 mb-2 flex-wrap">
+                        <h4 className="font-extrabold text-slate-900 group-hover:text-ocean-blue transition-colors">{booking.userName}</h4>
+                        <span className="px-2 py-1 text-xs font-bold uppercase tracking-widest rounded-full bg-slate-100 text-slate-700">
+                          #{booking.referenceNumber || booking.id.slice(0, 8).toUpperCase()}
                         </span>
+                        {booking.customFields?.cancellationRequestedAt && !booking.customFields?.cancellationApprovedAt && (
+                          <span className="px-2 py-1 text-[11px] font-bold uppercase tracking-[0.18em] rounded-full bg-orange-100 text-orange-700">
+                            Cancellation Requested
+                          </span>
+                        )}
+                        {booking.customFields?.cancellationApprovedAt && (
+                          <span className="px-2 py-1 text-[11px] font-bold uppercase tracking-[0.18em] rounded-full bg-emerald-100 text-emerald-700">
+                            Cancellation Approved
+                          </span>
+                        )}
                       </div>
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm text-slate-600 mb-3">
-                        <p><strong>Email:</strong> {customer.email}</p>
-                        <p><strong>Phone:</strong> {customer.phone}</p>
-                        <p><strong>Check-in:</strong> {new Date(customer.checkIn).toLocaleDateString()}</p>
-                        <p><strong>Check-out:</strong> {new Date(customer.checkOut).toLocaleDateString()}</p>
+                        <p><strong>Resort:</strong> {booking.resortName}</p>
+                        <p><strong>Guests:</strong> {booking.guests}</p>
+                        <p><strong>Check-in:</strong> {new Date(booking.checkIn).toLocaleDateString()}</p>
+                        <p><strong>Check-out:</strong> {new Date(booking.checkOut).toLocaleDateString()}</p>
                       </div>
                     </div>
-                    <div className="flex flex-col gap-2 ml-4">
-                      {customer.status === 'pending' && (
-                        <>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              updateCustomerStatus(customer.id, 'confirmed');
-                            }}
-                            className="px-3 py-1 bg-green-500 text-white text-xs font-bold rounded-lg hover:bg-green-600 transition-colors"
-                          >
-                            Confirm
-                          </button>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              updateCustomerStatus(customer.id, 'cancelled');
-                            }}
-                            className="px-3 py-1 bg-red-500 text-white text-xs font-bold rounded-lg hover:bg-red-600 transition-colors"
-                          >
-                            Cancel
-                          </button>
-                        </>
-                      )}
-                      {customer.status === 'confirmed' && (
+                    <div className="text-right flex flex-col items-end gap-3">
+                      <p className="text-sm text-slate-500">{booking.provider}</p>
+                      <p className="text-xl font-extrabold text-ocean-blue">₱{booking.amount.toLocaleString()}</p>
+                      {booking.customFields?.cancellationRequestedAt && !booking.customFields?.cancellationApprovedAt && (
                         <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            updateCustomerStatus(customer.id, 'cancelled');
-                          }}
-                          className="px-3 py-1 bg-red-500 text-white text-xs font-bold rounded-lg hover:bg-red-600 transition-colors"
+                          onClick={() => approveBookingCancellation(booking)}
+                          className="mt-2 inline-flex items-center justify-center rounded-2xl bg-emerald-600 px-3 py-2 text-sm font-bold text-white hover:bg-emerald-700 transition-all"
                         >
-                          Cancel
+                          Approve Cancellation
                         </button>
+                      )}
+                      {booking.customFields?.cancellationApprovedAt && (
+                        <span className="inline-flex items-center rounded-full bg-emerald-100 px-3 py-1 text-xs font-bold uppercase tracking-[0.18em] text-emerald-700">
+                          Cancellation Approved
+                        </span>
                       )}
                     </div>
                   </div>
@@ -3192,6 +3583,8 @@ function ResortAdminDashboard({ profile }: { profile: UserProfile }) {
           </div>
         </div>
       </div>
+
+      
     </div>
   );
 }
@@ -3474,6 +3867,7 @@ function AdminDashboard({ profile }: { profile: UserProfile }) {
   const [merchantStatusFilter, setMerchantStatusFilter] = useState<'all' | 'verified' | 'pending'>('all');
   const [bookingQuery, setBookingQuery] = useState('');
   const [selectedBooking, setSelectedBooking] = useState<Booking | null>(null);
+  const [paymentProofViewUrl, setPaymentProofViewUrl] = useState<string | null>(null);
 
   const loadData = useCallback(async (opts?: { silent?: boolean }) => {
     const silent = opts?.silent === true;
@@ -3582,6 +3976,29 @@ function AdminDashboard({ profile }: { profile: UserProfile }) {
       })
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }, [bookings, bookingQuery]);
+
+  const approveBookingCancellation = useCallback(async (booking: Booking) => {
+    const updated: Booking = {
+      ...booking,
+      customFields: {
+        ...booking.customFields,
+        cancellationApprovedAt: new Date().toISOString(),
+      },
+    };
+    setBookings((prev) => prev.map((b) => (b.id === updated.id ? updated : b)));
+    setSelectedBooking((prev) => (prev?.id === updated.id ? updated : prev));
+    try {
+      await storage.updateBookingRemote(updated);
+      storage.addUserNotification(
+        updated.userUid,
+        `Your cancellation request for booking at ${updated.resortName} has been approved by the admin.`
+      );
+      alert('Cancellation approved and the user has been notified.');
+    } catch (error) {
+      console.error('Failed to approve cancellation:', error);
+      alert('Cancellation approved locally, but failed to sync or notify the user.');
+    }
+  }, []);
 
   const recentPayments = useMemo(() =>
     [...transactions]
@@ -4289,9 +4706,25 @@ function AdminDashboard({ profile }: { profile: UserProfile }) {
                       </p>
                     </div>
                   </div>
-                  <div className="text-right">
+                  <div className="text-right flex flex-col items-end gap-2">
                     <p className="text-sm font-bold text-ocean-blue">₱{booking.amount.toLocaleString()}</p>
                     <p className="text-xs text-slate-400">{new Date(booking.createdAt).toLocaleDateString()}</p>
+                    {booking.customFields?.cancellationRequestedAt && !booking.customFields?.cancellationApprovedAt && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          approveBookingCancellation(booking);
+                        }}
+                        className="px-3 py-2 rounded-2xl bg-emerald-600 text-white text-[11px] font-bold uppercase tracking-[0.18em] hover:bg-emerald-700 transition-all"
+                      >
+                        Approve Cancellation
+                      </button>
+                    )}
+                    {booking.customFields?.cancellationApprovedAt && (
+                      <span className="px-3 py-2 rounded-2xl bg-emerald-100 text-emerald-700 text-[11px] font-bold uppercase tracking-[0.18em]">
+                        Cancellation Approved
+                      </span>
+                    )}
                   </div>
                 </div>
               ))
@@ -4400,15 +4833,97 @@ function AdminDashboard({ profile }: { profile: UserProfile }) {
                     <p className="text-sm font-extrabold text-blue-900">{selectedBooking.provider || 'Internal ShorePay Wallet'}</p>
                   </div>
                 </div>
+
+                {selectedBooking.paymentProofUrl && (
+                  <button
+                    onClick={() => setPaymentProofViewUrl(selectedBooking.paymentProofUrl!)}
+                    className="w-full p-4 bg-emerald-50 rounded-2xl border border-emerald-200 flex items-center justify-between hover:bg-emerald-100 transition-all active:scale-95"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="text-emerald-500">
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                        </svg>
+                      </div>
+                      <span className="font-bold text-emerald-700">View Payment Proof</span>
+                    </div>
+                    <svg className="w-5 h-5 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                    </svg>
+                  </button>
+                )}
               </div>
 
               <div className="p-8 bg-slate-50">
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => setSelectedBooking(null)}
+                    className="flex-1 py-4 bg-white border border-slate-200 rounded-2xl font-bold text-slate-600 hover:bg-slate-100 transition-all active:scale-95"
+                  >
+                    Close Overview
+                  </button>
+                  {selectedBooking.customFields?.cancellationRequestedAt && !selectedBooking.customFields?.cancellationApprovedAt && (
+                    <button
+                      onClick={() => approveBookingCancellation(selectedBooking)}
+                      className="flex-1 py-4 bg-emerald-600 text-white rounded-2xl font-bold hover:bg-emerald-700 transition-all shadow-lg active:scale-95"
+                    >
+                      Approve Cancellation
+                    </button>
+                  )}
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Payment Proof Viewer Modal */}
+      <AnimatePresence>
+        {paymentProofViewUrl && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[201] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-6"
+            onClick={() => setPaymentProofViewUrl(null)}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white rounded-[40px] overflow-hidden shadow-2xl max-w-2xl w-full"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-gradient-to-r from-emerald-50 to-blue-50">
+                <h3 className="text-2xl font-extrabold text-slate-900">Payment Proof</h3>
                 <button
-                  onClick={() => setSelectedBooking(null)}
-                  className="w-full py-5 bg-slate-900 text-white rounded-[24px] font-extrabold shadow-xl hover:bg-slate-800 transition-all active:scale-95"
+                  onClick={() => setPaymentProofViewUrl(null)}
+                  className="w-10 h-10 bg-white rounded-full flex items-center justify-center text-slate-400 hover:bg-slate-100 transition-all"
                 >
-                  Close Overview
+                  <X size={24} />
                 </button>
+              </div>
+              <div className="p-6 bg-slate-50 flex justify-center">
+                <img src={paymentProofViewUrl} alt="Payment Proof" className="max-w-full max-h-96 rounded-2xl border border-slate-200 shadow-lg" />
+              </div>
+              <div className="p-6 bg-white border-t border-slate-100 flex gap-3">
+                <button
+                  onClick={() => setPaymentProofViewUrl(null)}
+                  className="flex-1 py-3 bg-slate-100 text-slate-900 rounded-2xl font-bold hover:bg-slate-200 transition-all active:scale-95"
+                >
+                  Close
+                </button>
+                <a
+                  href={paymentProofViewUrl}
+                  download="payment-proof"
+                  className="flex-1 py-3 bg-emerald-600 text-white rounded-2xl font-bold hover:bg-emerald-700 transition-all active:scale-95 flex items-center justify-center gap-2"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10" />
+                  </svg>
+                  Download
+                </a>
               </div>
             </motion.div>
           </motion.div>

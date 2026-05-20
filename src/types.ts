@@ -10,16 +10,26 @@ export interface UserProfile {
   createdAt: string;
 }
 
+export type TransactionStatus = 'pending' | 'confirmed' | 'refunded' | 'cancel-requested' | 'cancelled';
+
 export interface Transaction {
   id: string;
   fromUid: string;
   toUid: string;
   amount: number;
   type: 'payment' | 'cash-in' | 'withdraw';
-  status: 'pending' | 'confirmed' | 'refunded';
+  status: TransactionStatus;
   timestamp: string;
   merchantName?: string;
   description?: string;
+  customFields?: Record<string, string>;
+}
+
+export interface Notification {
+  id: string;
+  message: string;
+  createdAt: string;
+  read?: boolean;
 }
 
 export interface Booking {
@@ -44,6 +54,7 @@ export interface Booking {
   provider: string;
   amount: number;
   referenceNumber?: string;
+  paymentProofUrl?: string;
   customFields?: Record<string, string>;
   createdAt: string;
 }
@@ -67,6 +78,7 @@ export interface Customer {
   paymentMethod: string;
   amount: number;
   referenceNumber?: string;
+  paymentProofUrl?: string;
   createdAt: string;
   status: 'pending' | 'confirmed' | 'cancelled';
   customFields?: Record<string, string>;
