@@ -1,4 +1,5 @@
-const CACHE_NAME = 'shorepay-pwa-v1';
+// Bump this value on deploys to force clients to refresh cached assets
+const CACHE_NAME = 'shorepay-pwa-v2';
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
