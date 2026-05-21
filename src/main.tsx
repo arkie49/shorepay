@@ -10,7 +10,14 @@ if (rootElement) {
 }
 
 if ((import.meta as any).env?.PROD && 'serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
+  window.addEventListener('load', async () => {
+    try {
+      const registrations = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(registrations.map((registration) => registration.unregister()));
+    } catch (error) {
+      console.warn('Failed to unregister previous service workers:', error);
+    }
+
     navigator.serviceWorker.register('/sw.js').catch(() => {});
   });
 }
