@@ -47,9 +47,10 @@ import emailjs from '@emailjs/browser';
 import { storage } from './services/storage';
 import { type Booking, type Customer, type Merchant, type UserProfile, type Transaction, type Resort, type UserRole, type Notification } from './types';
 
-const EMAILJS_SERVICE_ID = import.meta.env.VITE_EMAILJS_SERVICE_ID;
-const EMAILJS_TEMPLATE_ID = import.meta.env.VITE_EMAILJS_TEMPLATE_ID;
-const EMAILJS_PUBLIC_KEY = import.meta.env.VITE_EMAILJS_PUBLIC_KEY;
+// Use either uppercase VITE_ vars or lowercase vite_ vars depending on Vercel env naming
+const EMAILJS_SERVICE_ID = import.meta.env.VITE_EMAILJS_SERVICE_ID ?? (import.meta as any).env?.VITE_emailjs_service_id;
+const EMAILJS_TEMPLATE_ID = import.meta.env.VITE_EMAILJS_TEMPLATE_ID ?? (import.meta as any).env?.VITE_emailjs_template_id;
+const EMAILJS_PUBLIC_KEY = import.meta.env.VITE_EMAILJS_PUBLIC_KEY ?? (import.meta as any).env?.VITE_emailjs_public_key;
 
 // --- Utility ---
 function cn(...inputs: ClassValue[]) {
@@ -207,11 +208,21 @@ function ResortDetailScreen({ resort, profile, onBack }: { resort: Resort; profi
     });
 
     if (!EMAILJS_SERVICE_ID || !EMAILJS_TEMPLATE_ID) {
-      console.warn('EmailJS is not configured. Skipping email send.');
+      console.warn('EmailJS is not configured (missing service or template id). Skipping email send.');
       return false;
     }
 
+    // Ensure EmailJS is initialized (calling init again is idempotent)
     try {
+      if (EMAILJS_PUBLIC_KEY) {
+        try {
+          emailjs.init(EMAILJS_PUBLIC_KEY);
+          console.log('EmailJS init called inside sendConfirmationEmail');
+        } catch (initErr) {
+          console.warn('EmailJS init failed inside sendConfirmationEmail:', initErr);
+        }
+      }
+
       await emailjs.send(
         EMAILJS_SERVICE_ID,
         EMAILJS_TEMPLATE_ID,
@@ -1133,11 +1144,11 @@ function ResortDetailScreen({ resort, profile, onBack }: { resort: Resort; profi
                       paymentProofUrl,
                       createdAt: new Date().toISOString(),
                       status: 'confirmed',
-                      customFields: discountType !== 'none' ? {
+                      customFields: {
                         discountType,
                         discountAmount: discountAmount.toString(),
                         discountProofName: discountProof?.name ?? 'Not attached',
-                      } : undefined,
+                      },
                     };
 
                     try {
@@ -1163,13 +1174,18 @@ function ResortDetailScreen({ resort, profile, onBack }: { resort: Resort; profi
                         referenceNumber: referenceNumber || undefined,
                         paymentProofUrl,
                         createdAt: new Date().toISOString(),
-                        customFields: discountType !== 'none' ? {
+                        customFields: {
                           discountType,
                           discountAmount: discountAmount.toString(),
                           discountProofName: discountProof?.name ?? 'Not attached',
-                        } : undefined,
+                        },
                       });
                       await storage.addBookingRemote(booking);
+
+                      // Capture values needed for email before clearing state
+                      const customerEmailToSend = customer.email || profile?.email;
+                      const referenceToSend = referenceNumber;
+                      const amountToSend = amount;
 
                       setShowBooking(false);
                       setShowBookingSummary(false);
@@ -1185,16 +1201,15 @@ function ResortDetailScreen({ resort, profile, onBack }: { resort: Resort; profi
                       setCheckOut('');
                       setGuests(2);
 
-                      // Send confirmation email
-                      const customerEmail = customerForm.email || profile?.email;
-                      const emailSent = await sendConfirmationEmail(customerEmail, referenceNumber, resort.name, amount);
-                      
+                      // Send confirmation email using captured values
+                      const emailSent = await sendConfirmationEmail(customerEmailToSend, referenceToSend, resort.name, amountToSend);
+
                       if (emailSent) {
-                        console.log(`✓ Booking confirmed with email sent to ${customerEmail}`);
-                        alert(`✓ Booking confirmed!\n\nReference: ${referenceNumber}\nConfirmation sent to: ${customerEmail}`);
+                        console.log(`✓ Booking confirmed with email sent to ${customerEmailToSend}`);
+                        alert(`✓ Booking confirmed!\n\nReference: ${referenceToSend}\nConfirmation sent to: ${customerEmailToSend}`);
                       } else {
-                        console.warn(`⚠ Booking saved but email failed. Reference: ${referenceNumber}`);
-                        alert(`✓ Booking confirmed!\n\nReference: ${referenceNumber}\n\n⚠ Email notification failed. Your booking is still confirmed.`);
+                        console.warn(`⚠ Booking saved but email failed. Reference: ${referenceToSend}`);
+                        alert(`✓ Booking confirmed!\n\nReference: ${referenceToSend}\n\n⚠ Email notification failed. Your booking is still confirmed.`);
                       }
                     } catch (error) {
                       console.error('Error saving booking:', error);
@@ -1685,15 +1700,15 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<string>('home');
   const [selectedResort, setSelectedResort] = useState<Resort | null>(null);
 
-  const EMAILJS_SERVICE_ID = (import.meta as any).env?.VITE_emailjs_service_id ?? 'service_olirjm9';
-  const EMAILJS_TEMPLATE_ID = (import.meta as any).env?.VITE_emailjs_template_id ?? 'template_fkwnml1';
-  const EMAILJS_PUBLIC_KEY = (import.meta as any).env?.VITE_emailjs_public_key ?? 'y3AEOHY7CdzpY2crk';
-
   // Auth Listener Simulation
   useEffect(() => {
-    // Initialize EmailJS
-    emailjs.init(EMAILJS_PUBLIC_KEY);
-    console.log('✓ EmailJS initialized');
+    // Initialize EmailJS if config is available
+    if (EMAILJS_PUBLIC_KEY) {
+      emailjs.init(EMAILJS_PUBLIC_KEY);
+      console.log('✓ EmailJS initialized');
+    } else {
+      console.warn('EmailJS public key missing; email sending disabled.');
+    }
 
     // Initialize resort admins
     void storage.initializeResortAdmins().catch(() => {});
