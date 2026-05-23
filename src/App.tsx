@@ -48,9 +48,43 @@ import { storage } from './services/storage';
 import { type Booking, type Customer, type Merchant, type UserProfile, type Transaction, type Resort, type UserRole, type Notification } from './types';
 
 // Use either uppercase VITE_ vars or lowercase vite_ vars depending on Vercel env naming
-const EMAILJS_SERVICE_ID = import.meta.env.VITE_EMAILJS_SERVICE_ID ?? (import.meta as any).env?.VITE_emailjs_service_id;
-const EMAILJS_TEMPLATE_ID = import.meta.env.VITE_EMAILJS_TEMPLATE_ID ?? (import.meta as any).env?.VITE_emailjs_template_id;
-const EMAILJS_PUBLIC_KEY = import.meta.env.VITE_EMAILJS_PUBLIC_KEY ?? (import.meta as any).env?.VITE_emailjs_public_key;
+const rawEnv = import.meta.env as any;
+
+const getEnvValue = (keys: string[]) => {
+  for (const key of keys) {
+    const value = rawEnv[key];
+    if (typeof value === 'string' && value.trim().length > 0) {
+      return value;
+    }
+  }
+
+  if (typeof process !== 'undefined' && process.env) {
+    for (const key of keys) {
+      const value = (process.env as any)[key];
+      if (typeof value === 'string' && value.trim().length > 0) {
+        return value;
+      }
+    }
+  }
+
+  return undefined;
+};
+
+const EMAILJS_SERVICE_ID = getEnvValue([
+  'VITE_EMAILJS_SERVICE_ID',
+  'VITE_emailjs_service_id',
+  'EMAILJS_SERVICE_ID',
+]);
+const EMAILJS_TEMPLATE_ID = getEnvValue([
+  'VITE_EMAILJS_TEMPLATE_ID',
+  'VITE_emailjs_template_id',
+  'EMAILJS_TEMPLATE_ID',
+]);
+const EMAILJS_PUBLIC_KEY = getEnvValue([
+  'VITE_EMAILJS_PUBLIC_KEY',
+  'VITE_emailjs_public_key',
+  'EMAILJS_PUBLIC_KEY',
+]);
 
 // --- Utility ---
 function cn(...inputs: ClassValue[]) {
