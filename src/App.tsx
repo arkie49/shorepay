@@ -241,6 +241,9 @@ function ResortDetailScreen({ resort, profile, onBack }: { resort: Resort; profi
       customer_phone: customerPhone,
       customer_address: customerAddress,
       booking_date: new Date().toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' }),
+      discount_type: discountType === 'none' ? 'No discount' : discountType.charAt(0).toUpperCase() + discountType.slice(1),
+      discount_amount: discountAmount > 0 ? `₱${discountAmount.toLocaleString()}` : '₱0',
+      discount_proof_name: discountProof?.name ?? 'Not attached',
     };
 
     console.log('📧 Sending email with parameters:', templateParams);
