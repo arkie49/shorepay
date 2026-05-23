@@ -279,8 +279,7 @@ function ResortDetailScreen({ resort, profile, onBack }: { resort: Resort; profi
       await emailjs.send(
         EMAILJS_SERVICE_ID,
         EMAILJS_TEMPLATE_ID,
-        templateParams,
-        EMAILJS_PUBLIC_KEY
+        templateParams
       );
       console.log('✓ Confirmation email sent successfully to:', email);
       return true;
