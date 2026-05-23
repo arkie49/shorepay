@@ -86,6 +86,15 @@ const EMAILJS_PUBLIC_KEY = getEnvValue([
   'EMAILJS_PUBLIC_KEY',
 ]);
 
+// Debug logging for env values (development only)
+if (typeof window !== 'undefined' && import.meta.env.DEV) {
+  console.log('[DEV] EmailJS Env Check:', {
+    SERVICE_ID: EMAILJS_SERVICE_ID ? '✓ set' : '✗ missing',
+    TEMPLATE_ID: EMAILJS_TEMPLATE_ID ? '✓ set' : '✗ missing',
+    PUBLIC_KEY: EMAILJS_PUBLIC_KEY ? '✓ set' : '✗ missing',
+  });
+}
+
 // --- Utility ---
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -238,11 +247,15 @@ function ResortDetailScreen({ resort, profile, onBack }: { resort: Resort; profi
     console.log('EmailJS Config:', {
       serviceId: EMAILJS_SERVICE_ID,
       templateId: EMAILJS_TEMPLATE_ID,
-      publicKey: EMAILJS_PUBLIC_KEY
+      publicKey: EMAILJS_PUBLIC_KEY ? '✓ set' : '✗ missing'
     });
 
     if (!EMAILJS_SERVICE_ID || !EMAILJS_TEMPLATE_ID) {
-      console.warn('EmailJS is not configured (missing service or template id). Skipping email send.');
+      console.error('❌ EmailJS CONFIG ERROR: Missing credentials', {
+        SERVICE_ID_PRESENT: !!EMAILJS_SERVICE_ID,
+        TEMPLATE_ID_PRESENT: !!EMAILJS_TEMPLATE_ID,
+        PUBLIC_KEY_PRESENT: !!EMAILJS_PUBLIC_KEY,
+      });
       return false;
     }
 
@@ -251,11 +264,17 @@ function ResortDetailScreen({ resort, profile, onBack }: { resort: Resort; profi
       if (EMAILJS_PUBLIC_KEY) {
         try {
           emailjs.init(EMAILJS_PUBLIC_KEY);
-          console.log('EmailJS init called inside sendConfirmationEmail');
+          console.log('✓ EmailJS init called');
         } catch (initErr) {
-          console.warn('EmailJS init failed inside sendConfirmationEmail:', initErr);
+          console.error('❌ EmailJS init failed:', initErr);
         }
       }
+
+      console.log('📤 About to send email with:', {
+        to_email: email,
+        service: EMAILJS_SERVICE_ID,
+        template: EMAILJS_TEMPLATE_ID,
+      });
 
       await emailjs.send(
         EMAILJS_SERVICE_ID,
@@ -266,16 +285,10 @@ function ResortDetailScreen({ resort, profile, onBack }: { resort: Resort; profi
       console.log('✓ Confirmation email sent successfully to:', email);
       return true;
     } catch (error: any) {
-      console.error('✗ Failed to send confirmation email');
-      console.error('HTTP Status:', error?.status);
-      console.error('Status Code:', error?.statusCode);
-      console.error('Response Text:', error?.statusText);
-      console.error('Error Details:', {
-        name: error?.name,
-        message: error?.message,
-        response: error?.response,
-      });
-      console.error('Full Error Object:', error);
+      console.error('❌ EMAIL SEND FAILED');
+      console.error('Error:', error?.message);
+      console.error('Status:', error?.status);
+      console.error('Response:', error?.response);
       return false;
     }
   };
